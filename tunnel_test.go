@@ -33,12 +33,13 @@ func TestTunnel(t *testing.T) {
 	time.Sleep(time.Second)
 
 	// setup tunnelclient
-	client := NewClient(&ClientConfig{
+	client, _ := NewClient(&ClientConfig{
+		Identifier: identifier,
 		ServerAddr: serverAddr,
 		LocalAddr:  localAddr,
 		Debug:      true,
 	})
-	go client.StartWithIdentifier(identifier)
+	go client.Start()
 
 	// start local server to be tunneled
 	go http.ListenAndServe(localAddr, echo())
