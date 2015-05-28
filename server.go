@@ -20,6 +20,8 @@ import (
 	"github.com/koding/logging"
 )
 
+// Server is responsible for proxying public connections to the client over a
+// tunnel connection. It also listens to control messages from the client.
 type Server struct {
 	// pending contains the channel that is associated with each new tunnel request
 	pending   map[string]chan net.Conn
@@ -59,6 +61,7 @@ type ServerConfig struct {
 	YamuxConfig *yamux.Config
 }
 
+// NewServer creates a new Server
 func NewServer(cfg *ServerConfig) (*Server, error) {
 	yamuxConfig := yamux.DefaultConfig()
 	if cfg.YamuxConfig != nil {
@@ -116,7 +119,7 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) error {
 	}
 
 	// get the identifier associated with this host
-	identifier, ok := s.GetIdentifier(host)
+	identifier, ok := s.getIdentifier(host)
 	if !ok {
 		return fmt.Errorf("no virtual host available for %s", host)
 	}
@@ -200,7 +203,7 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) error {
 // tunnel TCP connections.
 func (s *Server) controlHandler(w http.ResponseWriter, r *http.Request) (ctErr error) {
 	identifier := r.Header.Get(xKTunnelIdentifier)
-	_, ok := s.GetHost(identifier)
+	_, ok := s.getHost(identifier)
 	if !ok {
 		return fmt.Errorf("no host associated for identifier %s. please use server.AddHost()", identifier)
 	}
@@ -334,20 +337,23 @@ func (s *Server) callOnDisconect(identifier string) error {
 	return fn()
 }
 
+// AddHost adds the given virtual host and maps it to the identifier.
 func (s *Server) AddHost(host, identifier string) {
 	s.virtualHosts.AddHost(host, identifier)
 }
 
+// DeleteHost deletes the given virtual host. Once removed any request to this
+// host is denied.
 func (s *Server) DeleteHost(host string) {
 	s.virtualHosts.DeleteHost(host)
 }
 
-func (s *Server) GetIdentifier(host string) (string, bool) {
+func (s *Server) getIdentifier(host string) (string, bool) {
 	identifier, ok := s.virtualHosts.GetIdentifier(host)
 	return identifier, ok
 }
 
-func (s *Server) GetHost(identifier string) (string, bool) {
+func (s *Server) getHost(identifier string) (string, bool) {
 	host, ok := s.virtualHosts.GetHost(identifier)
 	return host, ok
 }
