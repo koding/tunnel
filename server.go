@@ -1,3 +1,6 @@
+// Package tunnel is a server/client package that enables to proxy public
+// connections to your local machine over a tunnel connection from the local
+// machine to the public server.
 package tunnel
 
 import (
@@ -56,12 +59,11 @@ type ServerConfig struct {
 	YamuxConfig *yamux.Config
 }
 
-func NewServer(cfg *ServerConfig) *Server {
+func NewServer(cfg *ServerConfig) (*Server, error) {
 	yamuxConfig := yamux.DefaultConfig()
 	if cfg.YamuxConfig != nil {
 		if err := yamux.VerifyConfig(cfg.YamuxConfig); err != nil {
-			fmt.Fprintf(os.Stderr, err.Error())
-			os.Exit(1)
+			return nil, err
 		}
 
 		yamuxConfig = cfg.YamuxConfig
@@ -82,8 +84,8 @@ func NewServer(cfg *ServerConfig) *Server {
 		log:          log,
 	}
 
-	http.Handle(controlPath, s.checkConnect(s.ControlHandler))
-	return s
+	http.Handle(controlPath, s.checkConnect(s.controlHandler))
+	return s, nil
 }
 
 // ServeHTTP is a tunnel that creates an http/websocket tunnel between a
@@ -93,17 +95,18 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// going to infer and call the respective path handlers.
 	switch path.Clean(r.URL.Path) + "/" {
 	case controlPath:
-		s.checkConnect(s.ControlHandler).ServeHTTP(w, r)
+		s.checkConnect(s.controlHandler).ServeHTTP(w, r)
 		return
 	}
 
-	if err := s.HandleHTTP(w, r); err != nil {
+	if err := s.handleHTTP(w, r); err != nil {
 		http.Error(w, err.Error(), 502)
 		return
 	}
 }
 
-func (s *Server) HandleHTTP(w http.ResponseWriter, r *http.Request) error {
+// handleHTTP handles a single HTTP request
+func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) error {
 	s.log.Debug("HandleHTTP request:")
 	s.log.Debug("%v", r)
 
@@ -193,9 +196,9 @@ func (s *Server) HandleHTTP(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-// ControlHandler is used to capture incoming tunnel connect requests into raw
+// controlHandler is used to capture incoming tunnel connect requests into raw
 // tunnel TCP connections.
-func (s *Server) ControlHandler(w http.ResponseWriter, r *http.Request) (ctErr error) {
+func (s *Server) controlHandler(w http.ResponseWriter, r *http.Request) (ctErr error) {
 	identifier := r.Header.Get(xKTunnelIdentifier)
 	_, ok := s.GetHost(identifier)
 	if !ok {

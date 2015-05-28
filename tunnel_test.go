@@ -18,7 +18,7 @@ var (
 
 func TestTunnel(t *testing.T) {
 	// setup tunnelserver
-	server := NewServer(&ServerConfig{
+	server, _ := NewServer(&ServerConfig{
 		Debug: true,
 	})
 	server.AddHost(serverAddr, identifier)
