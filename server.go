@@ -61,7 +61,7 @@ type ServerConfig struct {
 	YamuxConfig *yamux.Config
 }
 
-// NewServer creates a new Server
+// NewServer creates a new Server. The defaults are used if config is nil.
 func NewServer(cfg *ServerConfig) (*Server, error) {
 	yamuxConfig := yamux.DefaultConfig()
 	if cfg.YamuxConfig != nil {
@@ -72,7 +72,7 @@ func NewServer(cfg *ServerConfig) (*Server, error) {
 		yamuxConfig = cfg.YamuxConfig
 	}
 
-	log := newLogger("streamtunnel-server", cfg.Debug)
+	log := newLogger("tunnel-server", cfg.Debug)
 	if cfg.Log != nil {
 		log = cfg.Log
 	}

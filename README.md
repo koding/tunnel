@@ -12,9 +12,11 @@ The project is under active development, please vendor it if you want to use it.
 
 # Usage
 
-The tunnel package consists of two parts. The `server` and the `client`. Server
-is the public facing part. It's type that satisfies the `http.Handler`. So it's
-easily pluggable into existing servers. 
+The tunnel package consists of two parts. The `server` and the `client`. 
+
+Server is the public facing part. It's type that satisfies the `http.Handler`.
+So it's easily pluggable into existing servers. 
+
 
 Let assume that you setup your DNS service so all `*.example.com` domains route
 to your server at the public IP `203.0.113.0`. Let us first create the server
@@ -30,7 +32,7 @@ import (
 )
 
 func main() {
-	server := tunnel.NewServer(nil)
+	server, _ := tunnel.NewServer(nil)
 	server.AddHost("sub.example.com", "1234")
 	http.ListenAndServe(":80", server)
 }
@@ -48,15 +50,22 @@ package main
 import "github.com/koding/tunnel"
 
 func main() {
-	client := tunnel.NewClient(&tunnel.ClientConfig{
+	cfg := &tunnel.ClientConfig{
+		Identifier: "1234",
 		ServerAddr: "203.0.113.0",
-	})
-	client.StartWithIdentifier("1234")
+	}
+
+	client, err := tunnel.NewClient(cfg)
+	if err != nil {
+		panic(err)
+	}
+
+	client.Start()
 }
 ```
 
-The `StartWithIdentifier` method is by default blocking. As you see you just
-passed the server address and the secret token. 
+The `Start()` method is by default blocking. As you see you, we just passed the
+server address and the secret token. 
 
 Now whenever someone hit `sub.example.com`, the request will be proxied to the
 machine where client is running and hit the local server running `127.0.0.1:80`
