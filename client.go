@@ -150,14 +150,14 @@ func (c *Client) connect(identifier string) error {
 		return err
 	}
 
-	remoteAddr := fmt.Sprintf("http://%s%s", conn.RemoteAddr(), ControlPath)
+	remoteAddr := fmt.Sprintf("http://%s%s", conn.RemoteAddr(), controlPath)
 	c.log.Debug("CONNECT to '%s'", remoteAddr)
 	req, err := http.NewRequest("CONNECT", remoteAddr, nil)
 	if err != nil {
 		return fmt.Errorf("CONNECT %s", err)
 	}
 
-	req.Header.Set(XKTunnelIdentifier, identifier)
+	req.Header.Set(xKTunnelIdentifier, identifier)
 	c.log.Debug("Writing request to TCP: %+v", req)
 	if err := req.Write(conn); err != nil {
 		return err
@@ -170,7 +170,7 @@ func (c *Client) connect(identifier string) error {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != 200 && resp.Status != Connected {
+	if resp.StatusCode != 200 && resp.Status != connected {
 		out, err := ioutil.ReadAll(resp.Body)
 		if err != nil {
 			return err
@@ -227,7 +227,7 @@ func (c *Client) connect(identifier string) error {
 
 func (c *Client) listenControl(ct *control) error {
 	for {
-		var msg ControlMsg
+		var msg controlMsg
 		err := ct.dec.Decode(&msg)
 		if err != nil {
 			c.session.GoAway()
@@ -238,7 +238,7 @@ func (c *Client) listenControl(ct *control) error {
 		c.log.Debug("controlMsg: %+v", msg)
 
 		switch msg.Action {
-		case RequestClientSession:
+		case requestClientSession:
 			go func() {
 				if err := c.proxy(msg.LocalPort); err != nil {
 					fmt.Fprintf(os.Stderr, "proxy err: '%s'\n", err)

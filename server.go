@@ -82,7 +82,7 @@ func NewServer(cfg *ServerConfig) *Server {
 		log:          log,
 	}
 
-	http.Handle(ControlPath, s.checkConnect(s.ControlHandler))
+	http.Handle(controlPath, s.checkConnect(s.ControlHandler))
 	return s
 }
 
@@ -92,7 +92,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// if the user didn't add the control and tunnel handler manually, we'll
 	// going to infer and call the respective path handlers.
 	switch path.Clean(r.URL.Path) + "/" {
-	case ControlPath:
+	case controlPath:
 		s.checkConnect(s.ControlHandler).ServeHTTP(w, r)
 		return
 	}
@@ -133,9 +133,9 @@ func (s *Server) HandleHTTP(w http.ResponseWriter, r *http.Request) error {
 	// localhost:8080, so send the port to the client so it knows how to proxy
 	// correctly. If no port is available, it's up to client how to intepret it
 	_, port, _ := net.SplitHostPort(r.Host)
-	msg := ControlMsg{
-		Action:    RequestClientSession,
-		Protocol:  HTTPTransport,
+	msg := controlMsg{
+		Action:    requestClientSession,
+		Protocol:  httpTransport,
 		LocalPort: port,
 	}
 
@@ -196,7 +196,7 @@ func (s *Server) HandleHTTP(w http.ResponseWriter, r *http.Request) error {
 // ControlHandler is used to capture incoming tunnel connect requests into raw
 // tunnel TCP connections.
 func (s *Server) ControlHandler(w http.ResponseWriter, r *http.Request) (ctErr error) {
-	identifier := r.Header.Get(XKTunnelIdentifier)
+	identifier := r.Header.Get(xKTunnelIdentifier)
 	_, ok := s.GetHost(identifier)
 	if !ok {
 		return fmt.Errorf("no host associated for identifier %s. please use server.AddHost()", identifier)
@@ -220,7 +220,7 @@ func (s *Server) ControlHandler(w http.ResponseWriter, r *http.Request) (ctErr e
 		return fmt.Errorf("hijack not possible %s", err)
 	}
 
-	io.WriteString(conn, "HTTP/1.1 "+Connected+"\n\n")
+	io.WriteString(conn, "HTTP/1.1 "+connected+"\n\n")
 
 	conn.SetDeadline(time.Time{})
 
