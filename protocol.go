@@ -1,4 +1,4 @@
-package streamtunnel
+package tunnel
 
 var Connected = "200 Connected to Tunnel"
 
