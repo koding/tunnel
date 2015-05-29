@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"net"
 	"net/http"
 	"sync"
@@ -331,45 +332,52 @@ func (c *Client) proxy(port string) error {
 		return err
 	}
 
-	// if the remote stream closes, we need a way to finish reading from local
-	// server. If we don't set a timeout, it'll wait forever.
-	local.SetReadDeadline(time.Now().Add(time.Second * 5))
-
 	c.log.Debug("Starting to proxy between remote and local server")
-	c.join(local, remote)
+	join(local, remote)
+	c.reqWg.Done()
 	c.log.Debug("Proxing between remote and local server finished")
 	return err
 }
 
-func (c *Client) join(local, remote net.Conn) {
+func join(local, remote net.Conn) {
 	transfer := func(dst, src net.Conn, done chan struct{}) {
 		_, err := io.Copy(dst, src)
 		if err != nil {
-			c.log.Error("copy error: %s", err.Error())
+			// log.Printf("copy error: %s\n", err.Error())
+		}
+
+		if err := src.Close(); err != nil {
+			log.Printf("close error: %s\n", err.Error())
 		}
 
 		switch s := src.(type) {
 		case *net.TCPConn:
 			// only client -> local connections are pure tcp conns
 			if err := s.CloseRead(); err != nil {
-				c.log.Error("CloseRead error: %s", err.Error())
+				log.Printf("closeRead error: %s\n", err.Error())
 			}
 		default:
 			if err := s.Close(); err != nil {
-				c.log.Error("Close error: %s", err.Error())
+				log.Printf("close error: %s\n", err.Error())
 			}
 		}
 
 		done <- struct{}{}
 	}
 
-	wait := make(chan struct{}, 2)
+	remoteClosed := make(chan struct{}, 1)
+	localClosed := make(chan struct{}, 1)
 
-	go transfer(local, remote, wait)
-	go transfer(remote, local, wait)
+	go transfer(local, remote, remoteClosed)
+	go transfer(remote, local, localClosed)
 
-	<-wait
-	<-wait
+	// close other side of connections when we are done with it
+	select {
+	case <-localClosed:
+		remote.Close()
+	case <-remoteClosed:
+		local.Close()
+	}
 
-	c.reqWg.Done()
+	return
 }
