@@ -1,8 +1,10 @@
 package tunnel
 
 import (
+	"fmt"
 	"io"
 	"io/ioutil"
+	"net"
 	"net/http"
 	"strconv"
 	"sync"
@@ -10,41 +12,74 @@ import (
 	"time"
 )
 
-var (
-	serverAddr = "127.0.0.1:7000"
-	localAddr  = "127.0.0.1:5000"
-	identifier = "123abc"
-)
+type testEnv struct {
+	server         *Server
+	client         *Client
+	remoteListener net.Listener
+	localListener  net.Listener
+}
 
-func TestTunnel(t *testing.T) {
-	// setup tunnelserver
-	server, _ := NewServer(&ServerConfig{
+func singleTestEnvironment(serverAddr, localAddr string) (*testEnv, error) {
+	var identifier = "123abc"
+
+	tunnelServer, _ := NewServer(&ServerConfig{
 		Debug: true,
 	})
-	server.AddHost(serverAddr, identifier)
-	http.Handle("/", server)
+	tunnelServer.AddHost(serverAddr, identifier)
+
+	muxer := http.NewServeMux()
+	muxer.Handle("/", tunnelServer)
+	server := http.Server{Handler: muxer}
+
+	remoteListener, err := net.Listen("tcp", serverAddr)
+	if err != nil {
+		return nil, err
+	}
+
 	go func() {
-		err := http.ListenAndServe(serverAddr, nil)
-		if err != nil {
-			t.Fatal(err)
+		if err := server.Serve(remoteListener); err != nil {
+			panic(err)
 		}
 	}()
 
-	time.Sleep(time.Second)
-
-	// setup tunnelclient
-	client, _ := NewClient(&ClientConfig{
+	tunnelClient, _ := NewClient(&ClientConfig{
 		Identifier: identifier,
 		ServerAddr: serverAddr,
 		LocalAddr:  localAddr,
 		Debug:      true,
 	})
-	go client.Start()
+	go tunnelClient.Start()
+	<-tunnelClient.StartNotify()
 
-	// start local server to be tunneled
-	go http.ListenAndServe(localAddr, echo())
+	localListener, err := net.Listen("tcp", localAddr)
+	if err != nil {
+		return nil, err
+	}
 
-	time.Sleep(time.Second)
+	go func() {
+		if err := http.Serve(localListener, echo()); err != nil {
+			panic(fmt.Sprintf("local listener:%s", err))
+		}
+	}()
+
+	return &testEnv{
+		server:         tunnelServer,
+		client:         tunnelClient,
+		remoteListener: remoteListener,
+		localListener:  localListener,
+	}, nil
+}
+
+func TestTunnel(t *testing.T) {
+	var (
+		serverAddr = "127.0.0.1:7000"
+		localAddr  = "127.0.0.1:5000"
+	)
+
+	_, err := singleTestEnvironment(serverAddr, localAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// make a request to tunnelserver, this should be tunneled to local server
 	var wg sync.WaitGroup
@@ -54,7 +89,7 @@ func TestTunnel(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			msg := "hello" + strconv.Itoa(i)
-			res, err := makeRequest(msg)
+			res, err := makeRequest(serverAddr, msg)
 			if err != nil {
 				t.Errorf("make request: %s", err)
 			}
@@ -68,7 +103,7 @@ func TestTunnel(t *testing.T) {
 	wg.Wait()
 }
 
-func makeRequest(msg string) (string, error) {
+func makeRequest(serverAddr, msg string) (string, error) {
 	resp, err := http.Get("http://" + serverAddr + "/?echo=" + msg)
 	if err != nil {
 		return "", err
@@ -89,3 +124,64 @@ func echo() http.Handler {
 		io.WriteString(w, msg)
 	})
 }
+
+func timeoutEcho() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(time.Second * 2)
+		msg := r.URL.Query().Get("echo")
+		io.WriteString(w, msg)
+	})
+}
+
+// func TestTimeout(t *testing.T) {
+// 	// setup tunnelserver
+// 	server, _ := NewServer(&ServerConfig{
+// 		Debug: true,
+// 	})
+// 	server.AddHost(serverAddr, identifier)
+//
+// 	m := http.NewServeMux()
+// 	m.Handle("/", server)
+// 	s := http.Server{Handler: m}
+//
+// 	var err error
+// 	listener, err = net.Listen("tcp", serverAddr)
+// 	if err != nil {
+// 		panic(err)
+// 	}
+//
+// 	go func() {
+// 		err = s.Serve(listener)
+// 		if err != nil {
+// 			t.Fatal(err)
+// 		}
+// 	}()
+//
+// 	time.Sleep(time.Second)
+//
+// 	// setup tunnelclient
+// 	client, _ := NewClient(&ClientConfig{
+// 		Identifier: identifier,
+// 		ServerAddr: serverAddr,
+// 		LocalAddr:  localAddr,
+// 		Debug:      true,
+// 	})
+// 	go client.Start()
+//
+// 	// start local server to be tunneled
+// 	go http.ListenAndServe(localAddr, timeoutEcho())
+//
+// 	time.Sleep(time.Second)
+//
+// 	done := make(chan bool, 0)
+// 	go func() {
+// 		res, err := makeRequest("hello")
+// 		if err != nil {
+// 			t.Errorf("make request: %s", err)
+// 		}
+// 		fmt.Printf("res = %+v\n", res)
+// 		close(done)
+// 	}()
+//
+// 	<-done
+// }

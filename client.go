@@ -30,8 +30,9 @@ type Client struct {
 	yamuxConfig *yamux.Config
 	log         logging.Logger
 
-	closed   bool
-	closedMu sync.Mutex
+	mu          sync.Mutex // guards the following
+	closed      bool       // if client calls Close() and quits
+	startNotify chan bool  // notifies if client established a conn to server
 
 	// redialBackoff is used to reconnect in exponential backoff intervals
 	redialBackoff backoff.BackOff
@@ -113,6 +114,7 @@ func NewClient(cfg *ClientConfig) (*Client, error) {
 		log:           log,
 		yamuxConfig:   yamuxConfig,
 		redialBackoff: forever,
+		startNotify:   make(chan bool, 1),
 	}
 
 	return client, nil
@@ -121,7 +123,8 @@ func NewClient(cfg *ClientConfig) (*Client, error) {
 // Start starts the client and connects to the server with the identifier.
 // client.FetchIdentifier() will be used if it's not nil. It's supports
 // reconnecting with exponential backoff intervals when the connection to the
-// server disconnects. Call client.Close() to shutdown the client completely.
+// server disconnects. Call client.Close() to shutdown the client completely. A
+// successfull connection will cause StartNotify() to receive a value.
 func (c *Client) Start() {
 	id := func() (string, error) {
 		if c.config.FetchIdentifier != nil {
@@ -145,13 +148,19 @@ func (c *Client) Start() {
 		}
 
 		// exit if closed
-		c.closedMu.Lock()
+		c.mu.Lock()
 		if c.closed {
-			c.closedMu.Unlock()
+			c.mu.Unlock()
 			return
 		}
-		c.closedMu.Unlock()
+		c.mu.Unlock()
 	}
+}
+
+// StartNotify returns a channel that receives a single value when the client
+// established a successfull connection to the server.
+func (c *Client) StartNotify() <-chan bool {
+	return c.startNotify
 }
 
 // Close closes the client and shutdowns the connection to the tunnel server
@@ -164,9 +173,9 @@ func (c *Client) Close() error {
 		return err
 	}
 
-	c.closedMu.Lock()
+	c.mu.Lock()
 	c.closed = true
-	c.closedMu.Unlock()
+	c.mu.Unlock()
 
 	if err := c.session.Close(); err != nil {
 		return err
@@ -252,8 +261,14 @@ func (c *Client) connect(identifier string) error {
 
 	ct := newControl(stream)
 	c.log.Debug("client has started successfully.")
-
 	c.redialBackoff.Reset() // we successfully connected, so we can reset the backoff
+
+	c.mu.Lock()
+	if c.startNotify != nil && !c.closed {
+		c.startNotify <- true
+	}
+	c.mu.Unlock()
+
 	return c.listenControl(ct)
 }
 
