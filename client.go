@@ -265,7 +265,14 @@ func (c *Client) connect(identifier string) error {
 
 	c.mu.Lock()
 	if c.startNotify != nil && !c.closed {
-		c.startNotify <- true
+		select {
+		case c.startNotify <- true:
+		default:
+			// reaching here is a race condition, because it indicates
+			// startNotify has already a value. We panic because it's library
+			// level problem that needs immediate attention
+			panic("startNotify chan is already full")
+		}
 	}
 	c.mu.Unlock()
 
