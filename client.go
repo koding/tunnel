@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"log"
 	"net"
 	"net/http"
 	"sync"
@@ -298,7 +297,6 @@ func (c *Client) listenControl(ct *control) error {
 
 		switch msg.Action {
 		case requestClientSession:
-			c.reqWg.Add(1)
 			c.log.Debug("Received request to open a session to server")
 			go func() {
 				if err := c.proxy(msg.LocalPort); err != nil {
@@ -333,51 +331,40 @@ func (c *Client) proxy(port string) error {
 	}
 
 	c.log.Debug("Starting to proxy between remote and local server")
-	join(local, remote)
+	c.reqWg.Add(1)
+	c.join(local, remote)
 	c.reqWg.Done()
+
 	c.log.Debug("Proxing between remote and local server finished")
 	return err
 }
 
-func join(local, remote net.Conn) {
-	transfer := func(dst, src net.Conn, done chan struct{}) {
+func (c *Client) join(local, remote net.Conn) {
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	transfer := func(side string, dst, src net.Conn) {
 		_, err := io.Copy(dst, src)
 		if err != nil {
-			// log.Printf("copy error: %s\n", err.Error())
+			c.log.Debug("copy error: %s\n", err.Error())
 		}
 
 		if err := src.Close(); err != nil {
-			log.Printf("close error: %s\n", err.Error())
+			c.log.Debug("%s: close error: %s\n", side, err.Error())
 		}
 
-		switch s := src.(type) {
-		case *net.TCPConn:
-			// only client -> local connections are pure tcp conns
-			if err := s.CloseRead(); err != nil {
-				log.Printf("closeRead error: %s\n", err.Error())
-			}
-		default:
-			if err := s.Close(); err != nil {
-				log.Printf("close error: %s\n", err.Error())
+		if d, ok := dst.(*net.TCPConn); ok {
+			if err := d.CloseWrite(); err != nil {
+				c.log.Debug("%s: closeWrite error: %s\n", side, err.Error())
 			}
 		}
 
-		done <- struct{}{}
+		wg.Done()
 	}
 
-	remoteClosed := make(chan struct{}, 1)
-	localClosed := make(chan struct{}, 1)
+	go transfer("remote to local", local, remote)
+	go transfer("local to remote", remote, local)
 
-	go transfer(local, remote, remoteClosed)
-	go transfer(remote, local, localClosed)
-
-	// close other side of connections when we are done with it
-	select {
-	case <-localClosed:
-		remote.Close()
-	case <-remoteClosed:
-		local.Close()
-	}
-
+	wg.Wait()
 	return
 }
