@@ -179,6 +179,10 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) error {
 
 	s.log.Debug("Session opened to client, writing request to client")
 	resp, err := http.ReadResponse(bufio.NewReader(stream), r)
+	if err != nil {
+		return fmt.Errorf("read from tunnel: %s", err.Error())
+	}
+
 	defer func() {
 		if resp.Body != nil {
 			if err := resp.Body.Close(); err != nil {
@@ -187,11 +191,9 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) error {
 		}
 	}()
 
-	if err != nil {
-		return fmt.Errorf("read from tunnel: %s", err.Error())
-	}
-
 	s.log.Debug("Response received, writing back to public connection")
+	s.log.Debug("%+v", resp)
+
 	copyHeader(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 

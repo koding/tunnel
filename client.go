@@ -2,6 +2,7 @@ package tunnel
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -325,9 +326,31 @@ func (c *Client) proxy(port string) error {
 	}
 
 	c.log.Debug("Dialing local server %s", localAddr)
-	local, err := net.Dial("tcp", localAddr)
+	var local io.ReadWriteCloser
+	local, err = net.Dial("tcp", localAddr)
 	if err != nil {
-		return err
+		c.log.Error("Dialing local server(%s) failed: %s", localAddr, err)
+
+		// send a response instead of canceling it on the server side. at least
+		// the public connection will know what's happening or not
+		body := bytes.NewBufferString("no local server")
+		resp := &http.Response{
+			Status:        http.StatusText(http.StatusServiceUnavailable),
+			StatusCode:    http.StatusServiceUnavailable,
+			Proto:         "HTTP/1.1",
+			ProtoMajor:    1,
+			ProtoMinor:    1,
+			Body:          ioutil.NopCloser(body),
+			ContentLength: int64(body.Len()),
+		}
+
+		buf := new(bytes.Buffer)
+
+		// write our response to the buffer. the join function will not
+		// transfer back and forth the public response and our custom in memory
+		// message
+		local = nopCloser{buf}
+		resp.Write(local)
 	}
 
 	c.log.Debug("Starting to proxy between remote and local server")
@@ -336,14 +359,14 @@ func (c *Client) proxy(port string) error {
 	c.reqWg.Done()
 
 	c.log.Debug("Proxing between remote and local server finished")
-	return err
+	return nil
 }
 
-func (c *Client) join(local, remote net.Conn) {
+func (c *Client) join(local, remote io.ReadWriteCloser) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 
-	transfer := func(side string, dst, src net.Conn) {
+	transfer := func(side string, dst, src io.ReadWriteCloser) {
 		_, err := io.Copy(dst, src)
 		if err != nil {
 			c.log.Debug("copy error: %s\n", err.Error())

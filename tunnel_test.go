@@ -3,7 +3,6 @@ package tunnel
 import (
 	"io"
 	"io/ioutil"
-	"log"
 	"math/rand"
 	"net"
 	"net/http"
@@ -39,12 +38,7 @@ func singleTestEnvironment(cfg *testConfig) (*testEnv, error) {
 	}
 
 	tunnelServer.AddHost(remoteListener.Addr().String(), identifier)
-
-	go func() {
-		if err := remoteServer.Serve(remoteListener); err != nil {
-			log.Printf("remote listener: '%s'\n", err)
-		}
-	}()
+	go remoteServer.Serve(remoteListener)
 
 	localListener, err := net.Listen("tcp", ":0")
 	if err != nil {
@@ -66,11 +60,7 @@ func singleTestEnvironment(cfg *testConfig) (*testEnv, error) {
 	}
 
 	localServer := http.Server{Handler: localHandler}
-	go func() {
-		if err := localServer.Serve(localListener); err != nil {
-			log.Printf("local listener: '%s'\n", err)
-		}
-	}()
+	go localServer.Serve(localListener)
 
 	return &testEnv{
 		server:         tunnelServer,
@@ -153,6 +143,26 @@ func TestMultipleLatencyRequest(t *testing.T) {
 	}
 
 	wg.Wait()
+	tenv.Close()
+}
+
+func TestNoLocalServer(t *testing.T) {
+	tenv, err := singleTestEnvironment(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// close local listener
+	tenv.localListener.Close()
+
+	msg := "hello"
+	res, err := makeRequest(tenv.remoteListener.Addr().String(), msg)
+	if err != nil {
+		t.Errorf("make request: %s", err)
+	}
+
+	if res != "no local server" {
+		t.Errorf("Expecting %s, got %s", msg, res)
+	}
 	tenv.Close()
 }
 
