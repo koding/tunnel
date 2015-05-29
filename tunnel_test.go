@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -146,6 +147,27 @@ func TestMultipleLatencyRequest(t *testing.T) {
 	tenv.Close()
 }
 
+func TestNoClient(t *testing.T) {
+	tenv, err := singleTestEnvironment(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// close client, this is the main point of the test
+	tenv.client.Close()
+
+	msg := "hello"
+	res, err := makeRequest(tenv.remoteListener.Addr().String(), msg)
+	if err != nil {
+		t.Errorf("make request: %s", err)
+	}
+
+	if res != "no client session established" {
+		t.Errorf("Expecting %s, got %s", msg, res)
+	}
+	tenv.Close()
+}
+
 func TestNoLocalServer(t *testing.T) {
 	tenv, err := singleTestEnvironment(nil)
 	if err != nil {
@@ -217,7 +239,7 @@ func makeRequest(serverAddr, msg string) (string, error) {
 		return "", err
 	}
 
-	return string(res), nil
+	return strings.TrimSpace(string(res)), nil
 }
 
 func echo() http.Handler {

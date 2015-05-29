@@ -124,7 +124,7 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) error {
 	// then grab the control connection that is associated with this identifier
 	control, ok := s.getControl(identifier)
 	if !ok {
-		return fmt.Errorf("no control available for %s", host)
+		return fmt.Errorf("no client session established")
 	}
 
 	session, err := s.getSession(identifier)
