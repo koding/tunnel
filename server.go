@@ -77,7 +77,7 @@ func NewServer(cfg *ServerConfig) (*Server, error) {
 		log = cfg.Log
 	}
 
-	s := &Server{
+	return &Server{
 		pending:      make(map[string]chan net.Conn),
 		sessions:     make(map[string]*yamux.Session),
 		onDisconnect: make(map[string]func() error),
@@ -85,10 +85,7 @@ func NewServer(cfg *ServerConfig) (*Server, error) {
 		controls:     newControls(),
 		yamuxConfig:  yamuxConfig,
 		log:          log,
-	}
-
-	http.Handle(controlPath, s.checkConnect(s.controlHandler))
-	return s, nil
+	}, nil
 }
 
 // ServeHTTP is a tunnel that creates an http/websocket tunnel between a
@@ -308,7 +305,9 @@ func (s *Server) listenControl(ct *control) {
 				s.log.Error("onDisconnect (%s) err: %s", ct.identifier, err)
 			}
 
-			s.log.Error("decode err: %s", err)
+			if err != io.EOF {
+				s.log.Error("decode err: %s", err)
+			}
 			return
 		}
 
@@ -335,7 +334,7 @@ func (s *Server) callOnDisconect(identifier string) error {
 
 	fn, ok := s.onDisconnect[identifier]
 	if !ok {
-		return fmt.Errorf("no onDisconncet function available for '%s'", identifier)
+		return nil
 	}
 
 	// delete after we are finished with it

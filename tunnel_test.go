@@ -6,6 +6,8 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strconv"
+	"sync"
 	"testing"
 	"time"
 )
@@ -18,62 +20,54 @@ type testEnv struct {
 }
 
 func (t *testEnv) Close() {
-	log.Println("test: Closing client connection")
 	if t.client != nil {
 		t.client.Close()
 	}
 
-	log.Println("test: Closing local listener")
-	if t.localListener != nil {
-		t.localListener.Close()
-	}
-
-	log.Println("test: Closing remote listener")
 	if t.remoteListener != nil {
 		t.remoteListener.Close()
 	}
 
+	if t.localListener != nil {
+		t.localListener.Close()
+	}
 }
 
-func singleTestEnvironment(serverAddr, localAddr string) (*testEnv, error) {
+func singleTestEnvironment() (*testEnv, error) {
 	var identifier = "123abc"
 
-	tunnelServer, _ := NewServer(&ServerConfig{
-		Debug: true,
-	})
-	tunnelServer.AddHost(serverAddr, identifier)
-
-	muxer := http.NewServeMux()
-	muxer.Handle("/", tunnelServer)
-	server := http.Server{Handler: muxer}
-
-	remoteListener, err := net.Listen("tcp", serverAddr)
+	tunnelServer, _ := NewServer(&ServerConfig{Debug: true})
+	remoteServer := http.Server{Handler: tunnelServer}
+	remoteListener, err := net.Listen("tcp", ":0")
 	if err != nil {
 		return nil, err
 	}
 
+	tunnelServer.AddHost(remoteListener.Addr().String(), identifier)
+
 	go func() {
-		if err := server.Serve(remoteListener); err != nil {
+		if err := remoteServer.Serve(remoteListener); err != nil {
 			log.Printf("remote listener: '%s'\n", err)
 		}
 	}()
 
+	localListener, err := net.Listen("tcp", ":0")
+	if err != nil {
+		return nil, err
+	}
+
 	tunnelClient, _ := NewClient(&ClientConfig{
 		Identifier: identifier,
-		ServerAddr: serverAddr,
-		LocalAddr:  localAddr,
+		ServerAddr: remoteListener.Addr().String(),
+		LocalAddr:  localListener.Addr().String(),
 		Debug:      true,
 	})
 	go tunnelClient.Start()
 	<-tunnelClient.StartNotify()
 
-	localListener, err := net.Listen("tcp", localAddr)
-	if err != nil {
-		return nil, err
-	}
-
+	localServer := http.Server{Handler: echo()}
 	go func() {
-		if err := http.Serve(localListener, echo()); err != nil {
+		if err := localServer.Serve(localListener); err != nil {
 			log.Printf("local listener: '%s'\n", err)
 		}
 	}()
@@ -86,20 +80,44 @@ func singleTestEnvironment(serverAddr, localAddr string) (*testEnv, error) {
 	}, nil
 }
 
-func TestSingleRequest(t *testing.T) {
-	var (
-		serverAddr = "127.0.0.1:7000"
-		localAddr  = "127.0.0.1:5000"
-	)
-
-	tenv, err := singleTestEnvironment(serverAddr, localAddr)
+func TestMultipleRequest(t *testing.T) {
+	tenv, err := singleTestEnvironment()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer tenv.Close()
 
+	// make a request to tunnelserver, this should be tunneled to local server
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+
+		go func(i int) {
+			defer wg.Done()
+			msg := "hello" + strconv.Itoa(i)
+			res, err := makeRequest(tenv.remoteListener.Addr().String(), msg)
+			if err != nil {
+				t.Errorf("make request: %s", err)
+			}
+
+			if res != msg {
+				t.Errorf("Expecting %s, got %s", msg, res)
+			}
+		}(i)
+	}
+
+	wg.Wait()
+	tenv.Close()
+}
+
+func TestSingleRequest(t *testing.T) {
+	tenv, err := singleTestEnvironment()
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	msg := "hello"
-	res, err := makeRequest(serverAddr, msg)
+	res, err := makeRequest(tenv.remoteListener.Addr().String(), msg)
 	if err != nil {
 		t.Errorf("make request: %s", err)
 	}
@@ -107,42 +125,9 @@ func TestSingleRequest(t *testing.T) {
 	if res != msg {
 		t.Errorf("Expecting %s, got %s", msg, res)
 	}
+	tenv.Close()
 }
 
-// func TestMultipleRequest(t *testing.T) {
-// 	var (
-// 		serverAddr = "127.0.0.1:7000"
-// 		localAddr  = "127.0.0.1:5000"
-// 	)
-//
-// 	tenv, err := singleTestEnvironment(serverAddr, localAddr)
-// 	if err != nil {
-// 		t.Fatal(err)
-// 	}
-// 	defer tenv.Close()
-//
-// 	// make a request to tunnelserver, this should be tunneled to local server
-// 	var wg sync.WaitGroup
-// 	for i := 0; i < 10; i++ {
-// 		wg.Add(1)
-//
-// 		go func(i int) {
-// 			defer wg.Done()
-// 			msg := "hello" + strconv.Itoa(i)
-// 			res, err := makeRequest(serverAddr, msg)
-// 			if err != nil {
-// 				t.Errorf("make request: %s", err)
-// 			}
-//
-// 			if res != msg {
-// 				t.Errorf("Expecting %s, got %s", msg, res)
-// 			}
-// 		}(i)
-// 	}
-//
-// 	wg.Wait()
-// }
-//
 func makeRequest(serverAddr, msg string) (string, error) {
 	resp, err := http.Get("http://" + serverAddr + "/?echo=" + msg)
 	if err != nil {

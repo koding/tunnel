@@ -290,7 +290,7 @@ func (c *Client) listenControl(ct *control) error {
 
 			c.session.GoAway()
 			c.session.Close()
-			return fmt.Errorf("decode err: '%s'", err)
+			return err
 		}
 
 		c.log.Debug("Received control msg %+v", msg)
