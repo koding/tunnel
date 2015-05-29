@@ -8,7 +8,6 @@ import (
 	"io/ioutil"
 	"net"
 	"net/http"
-	"os"
 	"sync"
 	"time"
 
@@ -33,6 +32,8 @@ type Client struct {
 	mu          sync.Mutex // guards the following
 	closed      bool       // if client calls Close() and quits
 	startNotify chan bool  // notifies if client established a conn to server
+
+	reqWg sync.WaitGroup
 
 	// redialBackoff is used to reconnect in exponential backoff intervals
 	redialBackoff backoff.BackOff
@@ -165,6 +166,8 @@ func (c *Client) StartNotify() <-chan bool {
 
 // Close closes the client and shutdowns the connection to the tunnel server
 func (c *Client) Close() error {
+	c.reqWg.Wait() // wait until all connections are finished
+
 	if c.session == nil {
 		return errors.New("session is not initialized")
 	}
@@ -284,18 +287,22 @@ func (c *Client) listenControl(ct *control) error {
 		var msg controlMsg
 		err := ct.dec.Decode(&msg)
 		if err != nil {
+			c.reqWg.Wait() // wait until all requests are finished
+
 			c.session.GoAway()
 			c.session.Close()
 			return fmt.Errorf("decode err: '%s'", err)
 		}
 
-		c.log.Debug("controlMsg: %+v", msg)
+		c.log.Debug("Received control msg %+v", msg)
 
 		switch msg.Action {
 		case requestClientSession:
+			c.reqWg.Add(1)
+			c.log.Debug("Received request to open a session to server")
 			go func() {
 				if err := c.proxy(msg.LocalPort); err != nil {
-					fmt.Fprintf(os.Stderr, "proxy err: '%s'\n", err)
+					c.log.Error("Proxy err between remote and local: '%s'\n", err)
 				}
 			}()
 		}
@@ -303,11 +310,12 @@ func (c *Client) listenControl(ct *control) error {
 }
 
 func (c *Client) proxy(port string) error {
-	conn, err := c.session.Open()
+	c.log.Debug("Opening a new stream from server session")
+	remote, err := c.session.Open()
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+	defer remote.Close()
 
 	if port == "0" {
 		port = "80"
@@ -318,42 +326,51 @@ func (c *Client) proxy(port string) error {
 		localAddr = c.config.LocalAddr
 	}
 
-	local, err := newLocalDial(localAddr)
+	c.log.Debug("Dialing local server %s", localAddr)
+	local, err := net.Dial("tcp", localAddr)
 	if err != nil {
 		return err
 	}
 
-	return <-c.join(local, conn)
+	// if the remote stream closes, we need a way to finish reading from local
+	// server. If we don't set a timeout, it'll wait forever.
+	local.SetReadDeadline(time.Now().Add(time.Second * 5))
+
+	c.log.Debug("Starting to proxy between remote and local server")
+	c.join(local, remote)
+	c.log.Debug("Proxing between remote and local server finished")
+	return err
 }
 
-func newLocalDial(addr string) (net.Conn, error) {
-	c, err := net.Dial("tcp", addr)
-	if err != nil {
-		return nil, err
-	}
-
-	c.SetDeadline(time.Time{})
-	return c, nil
-}
-
-func (c *Client) join(local, remote net.Conn) chan error {
-	errc := make(chan error, 2)
-
-	transfer := func(dst, src net.Conn) {
+func (c *Client) join(local, remote net.Conn) {
+	transfer := func(dst, src net.Conn, done chan struct{}) {
 		_, err := io.Copy(dst, src)
 		if err != nil {
 			c.log.Error("copy error: %s", err.Error())
 		}
 
-		if err := src.Close(); err != nil {
-			c.log.Error("Close error: %s", err.Error())
+		switch s := src.(type) {
+		case *net.TCPConn:
+			// only client -> local connections are pure tcp conns
+			if err := s.CloseRead(); err != nil {
+				c.log.Error("CloseRead error: %s", err.Error())
+			}
+		default:
+			if err := s.Close(); err != nil {
+				c.log.Error("Close error: %s", err.Error())
+			}
 		}
 
-		errc <- err
+		done <- struct{}{}
 	}
 
-	go transfer(local, remote)
-	go transfer(remote, local)
+	wait := make(chan struct{}, 2)
 
-	return errc
+	go transfer(local, remote, wait)
+	go transfer(remote, local, wait)
+
+	<-wait
+	<-wait
+
+	c.reqWg.Done()
 }

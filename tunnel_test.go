@@ -1,13 +1,11 @@
 package tunnel
 
 import (
-	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"net"
 	"net/http"
-	"strconv"
-	"sync"
 	"testing"
 	"time"
 )
@@ -17,6 +15,24 @@ type testEnv struct {
 	client         *Client
 	remoteListener net.Listener
 	localListener  net.Listener
+}
+
+func (t *testEnv) Close() {
+	log.Println("test: Closing client connection")
+	if t.client != nil {
+		t.client.Close()
+	}
+
+	log.Println("test: Closing local listener")
+	if t.localListener != nil {
+		t.localListener.Close()
+	}
+
+	log.Println("test: Closing remote listener")
+	if t.remoteListener != nil {
+		t.remoteListener.Close()
+	}
+
 }
 
 func singleTestEnvironment(serverAddr, localAddr string) (*testEnv, error) {
@@ -38,7 +54,7 @@ func singleTestEnvironment(serverAddr, localAddr string) (*testEnv, error) {
 
 	go func() {
 		if err := server.Serve(remoteListener); err != nil {
-			panic(err)
+			log.Printf("remote listener: '%s'\n", err)
 		}
 	}()
 
@@ -58,7 +74,7 @@ func singleTestEnvironment(serverAddr, localAddr string) (*testEnv, error) {
 
 	go func() {
 		if err := http.Serve(localListener, echo()); err != nil {
-			panic(fmt.Sprintf("local listener:%s", err))
+			log.Printf("local listener: '%s'\n", err)
 		}
 	}()
 
@@ -70,39 +86,63 @@ func singleTestEnvironment(serverAddr, localAddr string) (*testEnv, error) {
 	}, nil
 }
 
-func TestTunnel(t *testing.T) {
+func TestSingleRequest(t *testing.T) {
 	var (
 		serverAddr = "127.0.0.1:7000"
 		localAddr  = "127.0.0.1:5000"
 	)
 
-	_, err := singleTestEnvironment(serverAddr, localAddr)
+	tenv, err := singleTestEnvironment(serverAddr, localAddr)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer tenv.Close()
 
-	// make a request to tunnelserver, this should be tunneled to local server
-	var wg sync.WaitGroup
-	for i := 0; i < 10; i++ {
-		wg.Add(1)
-
-		go func(i int) {
-			defer wg.Done()
-			msg := "hello" + strconv.Itoa(i)
-			res, err := makeRequest(serverAddr, msg)
-			if err != nil {
-				t.Errorf("make request: %s", err)
-			}
-
-			if res != msg {
-				t.Errorf("Expecting %s, got %s", msg, res)
-			}
-		}(i)
+	msg := "hello"
+	res, err := makeRequest(serverAddr, msg)
+	if err != nil {
+		t.Errorf("make request: %s", err)
 	}
 
-	wg.Wait()
+	if res != msg {
+		t.Errorf("Expecting %s, got %s", msg, res)
+	}
 }
 
+// func TestMultipleRequest(t *testing.T) {
+// 	var (
+// 		serverAddr = "127.0.0.1:7000"
+// 		localAddr  = "127.0.0.1:5000"
+// 	)
+//
+// 	tenv, err := singleTestEnvironment(serverAddr, localAddr)
+// 	if err != nil {
+// 		t.Fatal(err)
+// 	}
+// 	defer tenv.Close()
+//
+// 	// make a request to tunnelserver, this should be tunneled to local server
+// 	var wg sync.WaitGroup
+// 	for i := 0; i < 10; i++ {
+// 		wg.Add(1)
+//
+// 		go func(i int) {
+// 			defer wg.Done()
+// 			msg := "hello" + strconv.Itoa(i)
+// 			res, err := makeRequest(serverAddr, msg)
+// 			if err != nil {
+// 				t.Errorf("make request: %s", err)
+// 			}
+//
+// 			if res != msg {
+// 				t.Errorf("Expecting %s, got %s", msg, res)
+// 			}
+// 		}(i)
+// 	}
+//
+// 	wg.Wait()
+// }
+//
 func makeRequest(serverAddr, msg string) (string, error) {
 	resp, err := http.Get("http://" + serverAddr + "/?echo=" + msg)
 	if err != nil {

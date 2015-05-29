@@ -155,6 +155,7 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) error {
 	var stream net.Conn
 	defer func() {
 		if stream != nil {
+			s.log.Debug("Closing stream")
 			stream.Close()
 		}
 	}()
@@ -179,10 +180,13 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 
+	s.log.Debug("Session opened to client, writing request to client")
 	resp, err := http.ReadResponse(bufio.NewReader(stream), r)
 	defer func() {
 		if resp.Body != nil {
-			resp.Body.Close()
+			if err := resp.Body.Close(); err != nil {
+				s.log.Error("resp.Body Close error: %s", err.Error())
+			}
 		}
 	}()
 
@@ -190,12 +194,15 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) error {
 		return fmt.Errorf("read from tunnel: %s", err.Error())
 	}
 
+	s.log.Debug("Response received, writing back to public connection")
 	copyHeader(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
+
 	if _, err := io.Copy(w, resp.Body); err != nil {
 		s.log.Error("copy err: %s", err) // do not return, because we might write multipe headers
 	}
 
+	s.log.Debug("Response copy is finished")
 	return nil
 }
 
@@ -215,7 +222,8 @@ func (s *Server) controlHandler(w http.ResponseWriter, r *http.Request) (ctErr e
 		return fmt.Errorf("control conn for %s already exist. \n", identifier)
 	}
 
-	s.log.Debug("tunnel with identifier %s", identifier)
+	s.log.Debug("Tunnel with identifier %s", identifier)
+
 	hj, ok := w.(http.Hijacker)
 	if !ok {
 		return errors.New("webserver doesn't support hijacking")
@@ -230,6 +238,7 @@ func (s *Server) controlHandler(w http.ResponseWriter, r *http.Request) (ctErr e
 
 	conn.SetDeadline(time.Time{})
 
+	s.log.Debug("Creating control session")
 	session, err := yamux.Server(conn, s.yamuxConfig)
 	if err != nil {
 		return err
@@ -263,6 +272,7 @@ func (s *Server) controlHandler(w http.ResponseWriter, r *http.Request) (ctErr e
 		return errors.New("timeout getting session")
 	}
 
+	s.log.Debug("Initiating handshake protocol")
 	buf := make([]byte, len(ctHandshakeRequest))
 	if _, err := stream.Read(buf); err != nil {
 		return err
@@ -281,6 +291,7 @@ func (s *Server) controlHandler(w http.ResponseWriter, r *http.Request) (ctErr e
 	s.addControl(identifier, ct)
 	go s.listenControl(ct)
 
+	s.log.Debug("Control connection is setup")
 	return nil
 }
 
