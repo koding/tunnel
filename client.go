@@ -166,8 +166,6 @@ func (c *Client) StartNotify() <-chan bool {
 
 // Close closes the client and shutdowns the connection to the tunnel server
 func (c *Client) Close() error {
-	c.reqWg.Wait() // wait until all connections are finished
-
 	if c.session == nil {
 		return errors.New("session is not initialized")
 	}
@@ -180,6 +178,7 @@ func (c *Client) Close() error {
 	c.closed = true
 	c.mu.Unlock()
 
+	c.reqWg.Wait() // wait until all connections are finished
 	if err := c.session.Close(); err != nil {
 		return err
 	}
