@@ -151,7 +151,8 @@ func TestNoLocalServer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// close local listener
+
+	// close local listener, this is the main point of the test
 	tenv.localListener.Close()
 
 	msg := "hello"

@@ -326,8 +326,7 @@ func (c *Client) proxy(port string) error {
 	}
 
 	c.log.Debug("Dialing local server %s", localAddr)
-	var local io.ReadWriteCloser
-	local, err = net.Dial("tcp", localAddr)
+	local, err := net.Dial("tcp", localAddr)
 	if err != nil {
 		c.log.Error("Dialing local server(%s) failed: %s", localAddr, err)
 
@@ -345,11 +344,8 @@ func (c *Client) proxy(port string) error {
 		}
 
 		buf := new(bytes.Buffer)
-
-		// write our response to the buffer. and copy it back to the remote
-		local = nopCloser{buf}
-		resp.Write(local)
-		if _, err := io.Copy(remote, local); err != nil {
+		resp.Write(buf)
+		if _, err := io.Copy(remote, buf); err != nil {
 			c.log.Debug("copy in-mem response error: %s\n", err.Error())
 		}
 		return nil
@@ -378,6 +374,7 @@ func (c *Client) join(local, remote io.ReadWriteCloser) {
 			c.log.Debug("%s: close error: %s\n", side, err.Error())
 		}
 
+		// not for yamux streams, but for client to local server connections
 		if d, ok := dst.(*net.TCPConn); ok {
 			if err := d.CloseWrite(); err != nil {
 				c.log.Debug("%s: closeWrite error: %s\n", side, err.Error())
