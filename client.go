@@ -346,11 +346,13 @@ func (c *Client) proxy(port string) error {
 
 		buf := new(bytes.Buffer)
 
-		// write our response to the buffer. the join function will not
-		// transfer back and forth the public response and our custom in memory
-		// message
+		// write our response to the buffer. and copy it back to the remote
 		local = nopCloser{buf}
 		resp.Write(local)
+		if _, err := io.Copy(remote, local); err != nil {
+			c.log.Debug("copy in-mem response error: %s\n", err.Error())
+		}
+		return nil
 	}
 
 	c.log.Debug("Starting to proxy between remote and local server")
