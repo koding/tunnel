@@ -150,11 +150,12 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) error {
 
 	// ask client to open a session to us, so we can accept it
 	if err := control.send(msg); err != nil {
-		if err == errControlClosed || err == yamux.ErrStreamClosed {
+		switch err {
+		case errControlClosed, yamux.ErrStreamClosed, yamux.ErrSessionShutdown:
 			return errNoClientSession
+		default:
+			return err
 		}
-
-		return err
 	}
 
 	var stream net.Conn
