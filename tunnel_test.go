@@ -13,6 +13,8 @@ import (
 	"time"
 )
 
+var debug = false
+
 type testEnv struct {
 	server         *Server
 	client         *Client
@@ -31,7 +33,7 @@ func singleTestEnvironment(cfg *testConfig) (*testEnv, error) {
 
 	var identifier = "123abc"
 
-	tunnelServer, _ := NewServer(&ServerConfig{Debug: true})
+	tunnelServer, _ := NewServer(&ServerConfig{Debug: debug})
 	remoteServer := http.Server{Handler: tunnelServer}
 	remoteListener, err := net.Listen("tcp", ":0")
 	if err != nil {
@@ -50,7 +52,7 @@ func singleTestEnvironment(cfg *testConfig) (*testEnv, error) {
 		Identifier: identifier,
 		ServerAddr: remoteListener.Addr().String(),
 		LocalAddr:  localListener.Addr().String(),
-		Debug:      true,
+		Debug:      debug,
 	})
 	go tunnelClient.Start()
 	<-tunnelClient.StartNotify()
@@ -94,7 +96,7 @@ func TestMultipleRequest(t *testing.T) {
 
 	// make a request to tunnelserver, this should be tunneled to local server
 	var wg sync.WaitGroup
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 100; i++ {
 		wg.Add(1)
 
 		go func(i int) {
@@ -126,7 +128,7 @@ func TestMultipleLatencyRequest(t *testing.T) {
 
 	// make a request to tunnelserver, this should be tunneled to local server
 	var wg sync.WaitGroup
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 100; i++ {
 		wg.Add(1)
 
 		go func(i int) {

@@ -146,7 +146,7 @@ func (c *Client) Start() {
 		}
 
 		if err := c.connect(identifier); err != nil {
-			c.log.Critical("client connect err: %s", err.Error())
+			c.log.Debug("client connect err: %s", err.Error())
 		}
 
 		// exit if closed
@@ -328,7 +328,7 @@ func (c *Client) proxy(port string) error {
 	c.log.Debug("Dialing local server %s", localAddr)
 	local, err := net.Dial("tcp", localAddr)
 	if err != nil {
-		c.log.Error("Dialing local server(%s) failed: %s", localAddr, err)
+		c.log.Debug("Dialing local server(%s) failed: %s", localAddr, err)
 
 		// send a response instead of canceling it on the server side. at least
 		// the public connection will know what's happening or not
