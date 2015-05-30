@@ -20,6 +20,10 @@ import (
 	"github.com/koding/logging"
 )
 
+var (
+	errNoClientSession = errors.New("no client session established")
+)
+
 // Server is responsible for proxying public connections to the client over a
 // tunnel connection. It also listens to control messages from the client.
 type Server struct {
@@ -124,7 +128,7 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) error {
 	// then grab the control connection that is associated with this identifier
 	control, ok := s.getControl(identifier)
 	if !ok {
-		return fmt.Errorf("no client session established")
+		return errNoClientSession
 	}
 
 	session, err := s.getSession(identifier)
@@ -146,6 +150,10 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) error {
 
 	// ask client to open a session to us, so we can accept it
 	if err := control.send(msg); err != nil {
+		if err == errControlClosed || err == yamux.ErrStreamClosed {
+			return errNoClientSession
+		}
+
 		return err
 	}
 

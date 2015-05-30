@@ -13,8 +13,6 @@ import (
 	"time"
 )
 
-var debug = true
-
 type testEnv struct {
 	server         *Server
 	client         *Client
@@ -29,6 +27,11 @@ type testConfig struct {
 func singleTestEnvironment(cfg *testConfig) (*testEnv, error) {
 	if cfg == nil {
 		cfg = &testConfig{}
+	}
+
+	debug := false
+	if testing.Verbose() {
+		debug = true
 	}
 
 	var identifier = "123abc"
@@ -164,7 +167,7 @@ func TestNoClient(t *testing.T) {
 		t.Errorf("make request: %s", err)
 	}
 
-	if res != "no client session established" {
+	if res != errNoClientSession.Error() {
 		t.Errorf("Expecting '%s', got '%s'", "no client session established", res)
 	}
 	tenv.Close()
