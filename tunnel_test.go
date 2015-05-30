@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-var debug = false
+var debug = true
 
 type testEnv struct {
 	server         *Server
@@ -165,7 +165,7 @@ func TestNoClient(t *testing.T) {
 	}
 
 	if res != "no client session established" {
-		t.Errorf("Expecting %s, got %s", msg, res)
+		t.Errorf("Expecting '%s', got '%s'", "no client session established", res)
 	}
 	tenv.Close()
 }
