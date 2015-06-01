@@ -9,6 +9,7 @@ import (
 	"io/ioutil"
 	"net"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -308,7 +309,7 @@ func (c *Client) listenControl(ct *control) error {
 	}
 }
 
-func (c *Client) proxy(port string) error {
+func (c *Client) proxy(port int) error {
 	c.log.Debug("Opening a new stream from server session")
 	remote, err := c.session.Open()
 	if err != nil {
@@ -316,11 +317,11 @@ func (c *Client) proxy(port string) error {
 	}
 	defer remote.Close()
 
-	if port == "0" {
-		port = "80"
+	if port == 0 {
+		port = 80
 	}
 
-	localAddr := "127.0.0.1:" + port
+	localAddr := "127.0.0.1:" + strconv.Itoa(port)
 	if c.config.LocalAddr != "" {
 		localAddr = c.config.LocalAddr
 	}
