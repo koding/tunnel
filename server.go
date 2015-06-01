@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -139,7 +140,14 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) error {
 	// if someoone hits foo.example.com:8080, this should be proxied to
 	// localhost:8080, so send the port to the client so it knows how to proxy
 	// correctly. If no port is available, it's up to client how to intepret it
-	_, port, _ := net.SplitHostPort(r.Host)
+	_, netPort, _ := net.SplitHostPort(r.Host)
+	port, err := strconv.Atoi(netPort)
+	if err != nil {
+		// no need to return, just continue lazily, port will be 0, which in
+		// our case will be proxied to client's localservers port 80
+		s.log.Warning("couldn't convert '%s' to integer: %s", netPort, err)
+	}
+
 	msg := controlMsg{
 		Action:    requestClientSession,
 		Protocol:  httpTransport,
