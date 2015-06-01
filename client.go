@@ -301,7 +301,7 @@ func (c *Client) listenControl(ct *control) error {
 			c.log.Debug("Received request to open a session to server")
 			go func() {
 				if err := c.proxy(msg.LocalPort); err != nil {
-					c.log.Error("Proxy err between remote and local: '%s'\n", err)
+					c.log.Error("Proxy err between remote and local: '%s'", err)
 				}
 			}()
 		}

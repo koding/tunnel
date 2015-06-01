@@ -155,6 +155,7 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) error {
 		// be broken. In all cases, it's not reliable anymore having a client
 		// session.
 		control.Close()
+		s.deleteControl(identifier)
 		return errNoClientSession
 	}
 
@@ -226,6 +227,7 @@ func (s *Server) controlHandler(w http.ResponseWriter, r *http.Request) (ctErr e
 	ct, ok := s.getControl(identifier)
 	if ok {
 		ct.Close()
+		s.deleteControl(identifier)
 		s.log.Warning("Control connection for '%s' already exists. This is a race condition and needs to be fixed on client implementation", identifier)
 		return fmt.Errorf("control conn for %s already exist. \n", identifier)
 	}
