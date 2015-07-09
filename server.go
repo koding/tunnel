@@ -203,7 +203,7 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) error {
 
 	defer func() {
 		if resp.Body != nil {
-			if err := resp.Body.Close(); err != nil {
+			if err := resp.Body.Close(); err != nil && err != io.ErrUnexpectedEOF {
 				s.log.Error("resp.Body Close error: %s", err.Error())
 			}
 		}
@@ -216,7 +216,11 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) error {
 	w.WriteHeader(resp.StatusCode)
 
 	if _, err := io.Copy(w, resp.Body); err != nil {
-		s.log.Error("copy err: %s", err) // do not return, because we might write multipe headers
+		if err == io.ErrUnexpectedEOF {
+			s.log.Debug("Client closed the connection, couldn't copy response")
+		} else {
+			s.log.Error("copy err: %s", err) // do not return, because we might write multipe headers
+		}
 	}
 
 	s.log.Debug("Response copy is finished")
