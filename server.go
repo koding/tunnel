@@ -145,7 +145,7 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		// no need to return, just continue lazily, port will be 0, which in
 		// our case will be proxied to client's localservers port 80
-		s.log.Warning("couldn't convert '%s' to integer: %s", netPort, err)
+		s.log.Debug("No port available for '%s', sending port 80 to client", r.Host)
 	}
 
 	msg := controlMsg{
