@@ -323,7 +323,13 @@ func (s *Server) listenControl(ct *control) {
 		var msg map[string]interface{}
 		err := ct.dec.Decode(&msg)
 		if err != nil {
+			host, _ := s.getHost(ct.identifier)
+			s.log.Debug("Closing client connection: '%s', %s'", host, ct.identifier)
+
+			// close client connection so it reconnects again
 			ct.Close()
+
+			// don't forget to cleanup anything
 			s.deleteControl(ct.identifier)
 			s.deleteSession(ct.identifier)
 			if err := s.callOnDisconect(ct.identifier); err != nil {
