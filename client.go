@@ -65,6 +65,12 @@ type ClientConfig struct {
 	// tunnelserver's public exposed Port.
 	LocalAddr string
 
+	// FetchLocalAddr is used for looking up TCP address of the server,
+	// which an incoming connection should be proxied to.
+	//
+	// If nil, "127.0.0.1:port" will be used instead.
+	FetchLocalAddr func(port int) (string, error)
+
 	// Debug enables debug mode, enable only if you want to debug the server.
 	Debug bool
 
@@ -331,17 +337,60 @@ func (c *Client) listenControl(ct *control) error {
 
 		switch msg.Action {
 		case requestClientSession:
-			c.log.Debug("Received request to open a session to server")
-			go func() {
-				if err := c.proxy(msg.LocalPort); err != nil {
-					c.log.Error("Proxy err between remote and local: '%s'", err)
-				}
-			}()
+			switch msg.Protocol {
+			case tcpTransport:
+				c.log.Debug("Received request to open a TCP session to server")
+
+				go func() {
+					if err := c.proxyTCP(msg.LocalPort); err != nil {
+						c.log.Error("proxying between remote and local failed: %s", err)
+					}
+				}()
+
+			case httpTransport:
+				c.log.Debug("Received request to open a HTTP session to server")
+
+				go func() {
+					if err := c.proxyHTTP(msg.LocalPort); err != nil {
+						c.log.Error("Proxy err between remote and local: '%s'", err)
+					}
+				}()
+			}
 		}
 	}
 }
 
-func (c *Client) proxy(port int) error {
+func (c *Client) proxyTCP(port int) error {
+	c.log.Debug("Opening a new stream from server session")
+
+	remote, err := c.session.Open()
+	if err != nil {
+		return err
+	}
+	defer remote.Close()
+
+	localAddr := fmt.Sprintf("127.0.0.1:%d", port)
+	if c.config.FetchLocalAddr != nil {
+		localAddr, err = c.config.FetchLocalAddr(port)
+		if err != nil {
+			return fmt.Errorf("failed to fetch LocalAddr for port %d: %s", port, err)
+		}
+	}
+
+	c.log.Debug("Dialing local server: %s", localAddr)
+
+	local, err := net.DialTimeout("tcp", localAddr, defaultTimeout)
+	if err != nil {
+		c.log.Error("dialing local server %s failed: %s", localAddr, err)
+		return err
+	}
+
+	c.join(local, remote)
+
+	return nil
+}
+
+func (c *Client) proxyHTTP(port int) error {
 	c.log.Debug("Opening a new stream from server session")
 	remote, err := c.session.Open()
 	if err != nil {
@@ -352,16 +401,15 @@ func (c *Client) proxy(port int) error {
 	if port == 0 {
 		port = 80
 	}
-
 	localAddr := "127.0.0.1:" + strconv.Itoa(port)
 	if c.config.LocalAddr != "" {
 		localAddr = c.config.LocalAddr
 	}
 
-	c.log.Debug("Dialing local server %s", localAddr)
-	local, err := net.Dial("tcp", localAddr)
+	c.log.Debug("Dialing local server: %s", localAddr)
+	local, err := net.DialTimeout("tcp", localAddr, defaultTimeout)
 	if err != nil {
-		c.log.Debug("Dialing local server(%s) failed: %s", localAddr, err)
+		c.log.Error("dialing local server %s failed: %s", localAddr, err)
 
 		// send a response instead of canceling it on the server side. at least
 		// the public connection will know what's happening or not
@@ -384,21 +432,21 @@ func (c *Client) proxy(port int) error {
 		return nil
 	}
 
-	c.log.Debug("Starting to proxy between remote and local server")
 	c.reqWg.Add(1)
 	c.join(local, remote)
 	c.reqWg.Done()
 
-	c.log.Debug("Proxing between remote and local server finished")
 	return nil
 }
 
-func (c *Client) join(local, remote io.ReadWriteCloser) {
+func (c *Client) join(local, remote net.Conn) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 
-	transfer := func(side string, dst, src io.ReadWriteCloser) {
-		_, err := io.Copy(dst, src)
+	transfer := func(side string, dst, src net.Conn) {
+		c.log.Debug("proxing %s -> %s", src.RemoteAddr(), dst.RemoteAddr())
+
+		n, err := io.Copy(dst, src)
 		if err != nil {
 			c.log.Debug("copy error: %s\n", err.Error())
 		}
@@ -415,11 +463,11 @@ func (c *Client) join(local, remote io.ReadWriteCloser) {
 		}
 
 		wg.Done()
+		c.log.Debug("done proxing %s -> %s: %d bytes", src.RemoteAddr(), dst.RemoteAddr(), n)
 	}
 
 	go transfer("remote to local", local, remote)
 	go transfer("local to remote", remote, local)
 
 	wg.Wait()
-	return
 }
