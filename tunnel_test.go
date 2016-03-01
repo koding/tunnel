@@ -29,14 +29,9 @@ func singleTestEnvironment(cfg *testConfig) (*testEnv, error) {
 		cfg = &testConfig{}
 	}
 
-	debug := false
-	if testing.Verbose() {
-		debug = true
-	}
-
 	var identifier = "123abc"
 
-	tunnelServer, _ := NewServer(&ServerConfig{Debug: debug})
+	tunnelServer, _ := NewServer(&ServerConfig{Debug: testing.Verbose()})
 	remoteServer := http.Server{Handler: tunnelServer}
 	remoteListener, err := net.Listen("tcp", ":0")
 	if err != nil {
@@ -55,7 +50,7 @@ func singleTestEnvironment(cfg *testConfig) (*testEnv, error) {
 		Identifier: identifier,
 		ServerAddr: remoteListener.Addr().String(),
 		LocalAddr:  localListener.Addr().String(),
-		Debug:      debug,
+		Debug:      testing.Verbose(),
 	})
 	go tunnelClient.Start()
 	<-tunnelClient.StartNotify()
