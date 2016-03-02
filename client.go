@@ -68,7 +68,12 @@ type ClientConfig struct {
 	// FetchLocalAddr is used for looking up TCP address of the server,
 	// which an incoming connection should be proxied to.
 	//
-	// If nil, "127.0.0.1:port" will be used instead.
+	// If port-based routing is used, this field is required for tunneling to
+	// function properly. Otherwise you'll be forwarding traffic to random
+	// ports and this is usually not desired.
+	//
+	// If IP-based routing is used this field may be nil, in that case
+	// "127.0.0.1:port" will be used instead.
 	FetchLocalAddr func(port int) (string, error)
 
 	// Debug enables debug mode, enable only if you want to debug the server.

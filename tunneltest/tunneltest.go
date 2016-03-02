@@ -7,11 +7,16 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"sort"
+	"strconv"
+	"sync"
 	"testing"
 
 	"github.com/koding/tunnel"
 )
+
+var noDebug = os.Getenv("NO_DEBUG") == "1"
 
 func logf(format string, args ...interface{}) {
 	if testing.Verbose() {
@@ -26,6 +31,20 @@ func nonil(err ...error) error {
 		}
 	}
 	return nil
+}
+
+func parseHostPort(addr string) (string, int, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return "", 0, err
+	}
+
+	n, err := strconv.ParseUint(port, 10, 16)
+	if err != nil {
+		return "", 0, err
+	}
+
+	return host, int(n), nil
 }
 
 // UsableAddrs returns all tcp addresses that we can bind a listener
@@ -117,10 +136,15 @@ type TunnelTest struct {
 	Listeners map[string][2]net.Listener // [0] is local listener, [1] is remote one (for TCP tunnels)
 	Addrs     []*net.TCPAddr
 	Tunnels   map[string]*Tunnel
+
+	mu sync.Mutex // protects Listeners
 }
 
 func NewTunnelTest() (*TunnelTest, error) {
-	s, err := tunnel.NewServer(&tunnel.ServerConfig{Debug: testing.Verbose()})
+	cfg := &tunnel.ServerConfig{
+		Debug: testing.Verbose() && !noDebug,
+	}
+	s, err := tunnel.NewServer(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -190,10 +214,11 @@ func (tt *TunnelTest) serveSingle(ident string, t *Tunnel) (bool, error) {
 	}
 
 	cfg := &tunnel.ClientConfig{
-		Identifier: ident,
-		ServerAddr: tt.ServerAddr().String(),
-		LocalAddr:  l.Addr().String(),
-		Debug:      testing.Verbose(),
+		Identifier:     ident,
+		ServerAddr:     tt.ServerAddr().String(),
+		LocalAddr:      l.Addr().String(),
+		FetchLocalAddr: tt.fetchLocalAddr,
+		Debug:          testing.Verbose() && !noDebug,
 	}
 
 	// Register tunnel:
@@ -223,7 +248,10 @@ func (tt *TunnelTest) serveSingle(ident string, t *Tunnel) (bool, error) {
 		go (&http.Server{Handler: h}).Serve(l)
 
 		tt.Server.AddHost(cfg.LocalAddr, ident)
+
+		tt.mu.Lock()
 		tt.Listeners[ident] = [2]net.Listener{l, nil}
+		tt.mu.Unlock()
 
 		if err := tt.addClient(ident, cfg); err != nil {
 			return false, fmt.Errorf("error creating client for %q tunnel: %s", ident, err)
@@ -254,7 +282,9 @@ func (tt *TunnelTest) serveSingle(ident string, t *Tunnel) (bool, error) {
 		var remote net.Listener
 
 		if t.RemoteAddrIdent != "" {
+			tt.mu.Lock()
 			remote = tt.Listeners[t.RemoteAddrIdent][1]
+			tt.mu.Unlock()
 		} else {
 			remote, err = net.Listen("tcp", t.RemoteAddr)
 			if err != nil {
@@ -271,7 +301,10 @@ func (tt *TunnelTest) serveSingle(ident string, t *Tunnel) (bool, error) {
 		}
 
 		tt.Server.AddAddr(remote, t.IP, addrIdent)
+
+		tt.mu.Lock()
 		tt.Listeners[ident] = [2]net.Listener{l, remote}
+		tt.mu.Unlock()
 
 		if _, ok := tt.Clients[ident]; !ok {
 			if err := tt.addClient(ident, cfg); err != nil {
@@ -353,6 +386,29 @@ func (tt *TunnelTest) serveDeps(tunnels map[string]*Tunnel) error {
 	}
 
 	return nil
+}
+
+func (tt *TunnelTest) fetchLocalAddr(port int) (string, error) {
+	tt.mu.Lock()
+	defer tt.mu.Unlock()
+
+	for _, l := range tt.Listeners {
+		if l[1] == nil {
+			// this listener does not belong to a TCP tunnel
+			continue
+		}
+
+		_, remotePort, err := parseHostPort(l[1].Addr().String())
+		if err != nil {
+			return "", err
+		}
+
+		if port == remotePort {
+			return l[0].Addr().String(), nil
+		}
+	}
+
+	return "", fmt.Errorf("no route for %d port", port)
 }
 
 func (tt *TunnelTest) ServerAddr() net.Addr {
