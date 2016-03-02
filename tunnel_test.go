@@ -1,96 +1,81 @@
-package tunnel
+package tunnel_test
 
 import (
+	"bufio"
+	"bytes"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"math/rand"
 	"net"
 	"net/http"
+	"net/url"
+	"os"
 	"strconv"
-	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/koding/tunnel/tunneltest"
 )
 
-type testEnv struct {
-	server         *Server
-	client         *Client
-	remoteListener net.Listener
-	localListener  net.Listener
+func init() {
+	rand.Seed(time.Now().UnixNano() + int64(os.Getpid()))
 }
 
-type testConfig struct {
-	localHandler http.Handler
-}
-
-func singleTestEnvironment(cfg *testConfig) (*testEnv, error) {
-	if cfg == nil {
-		cfg = &testConfig{}
+func echo(tt *tunneltest.TunnelTest, echo string) (string, error) {
+	req := tt.Request("http", url.Values{"echo": []string{echo}})
+	if req == nil {
+		return "", fmt.Errorf(`tunnel "http" does not exist`)
 	}
 
-	var identifier = "123abc"
+	req.Close = rand.Int()%2 == 0
 
-	tunnelServer, _ := NewServer(&ServerConfig{Debug: testing.Verbose()})
-	remoteServer := http.Server{Handler: tunnelServer}
-	remoteListener, err := net.Listen("tcp", ":0")
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
+	defer resp.Body.Close()
 
-	tunnelServer.AddHost(remoteListener.Addr().String(), identifier)
-	go remoteServer.Serve(remoteListener)
-
-	localListener, err := net.Listen("tcp", ":0")
+	p, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 
-	tunnelClient, _ := NewClient(&ClientConfig{
-		Identifier: identifier,
-		ServerAddr: remoteListener.Addr().String(),
-		LocalAddr:  localListener.Addr().String(),
-		Debug:      testing.Verbose(),
-	})
-	go tunnelClient.Start()
-	<-tunnelClient.StartNotify()
-
-	localHandler := echo()
-	if cfg.localHandler != nil {
-		localHandler = cfg.localHandler
-	}
-
-	localServer := http.Server{Handler: localHandler}
-	go localServer.Serve(localListener)
-
-	return &testEnv{
-		server:         tunnelServer,
-		client:         tunnelClient,
-		remoteListener: remoteListener,
-		localListener:  localListener,
-	}, nil
+	return string(bytes.TrimSpace(p)), nil
 }
 
-func (t *testEnv) Close() {
-	if t.client != nil {
-		t.client.Close()
-	}
+func handlerEchoHTTP(w http.ResponseWriter, r *http.Request) {
+	io.WriteString(w, r.URL.Query().Get("echo"))
+}
 
-	if t.remoteListener != nil {
-		t.remoteListener.Close()
-	}
+func handlerLatencyEchoHTTP(w http.ResponseWriter, r *http.Request) {
+	time.Sleep(time.Duration(rand.Intn(2000)) * time.Millisecond)
+	handlerEchoHTTP(w, r)
+}
 
-	if t.localListener != nil {
-		t.localListener.Close()
+func handlerEchoTCP(conn net.Conn) {
+	io.Copy(bufio.NewWriter(conn), bufio.NewReader(conn))
+}
+
+func singleHTTP(handler interface{}) map[string]*tunneltest.Tunnel {
+	return map[string]*tunneltest.Tunnel{
+		"http": {
+			Type:      tunneltest.TypeHTTP,
+			LocalAddr: "127.0.0.1:0",
+			Handler:   handler,
+		},
 	}
 }
 
 func TestMultipleRequest(t *testing.T) {
-	tenv, err := singleTestEnvironment(nil)
+	t.Parallel()
+
+	tt, err := tunneltest.Serve(singleHTTP(handlerEchoHTTP))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer tenv.Close()
+	defer tt.Close()
 
 	// make a request to tunnelserver, this should be tunneled to local server
 	var wg sync.WaitGroup
@@ -100,7 +85,7 @@ func TestMultipleRequest(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			msg := "hello" + strconv.Itoa(i)
-			res, err := makeRequest(tenv.remoteListener.Addr().String(), msg)
+			res, err := echo(tt, msg)
 			if err != nil {
 				t.Errorf("make request: %s", err)
 			}
@@ -112,17 +97,16 @@ func TestMultipleRequest(t *testing.T) {
 	}
 
 	wg.Wait()
-	tenv.Close()
 }
 
 func TestMultipleLatencyRequest(t *testing.T) {
-	tenv, err := singleTestEnvironment(&testConfig{
-		localHandler: randomLatencyEcho(),
-	})
+	t.Parallel()
+
+	tt, err := tunneltest.Serve(singleHTTP(handlerLatencyEchoHTTP))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer tenv.Close()
+	defer tt.Close()
 
 	// make a request to tunnelserver, this should be tunneled to local server
 	var wg sync.WaitGroup
@@ -131,7 +115,7 @@ func TestMultipleLatencyRequest(t *testing.T) {
 
 		go func(i int) {
 			msg := "hello" + strconv.Itoa(i)
-			res, err := makeRequest(tenv.remoteListener.Addr().String(), msg)
+			res, err := echo(tt, msg)
 			if err != nil {
 				t.Errorf("make request: %s", err)
 			}
@@ -144,34 +128,37 @@ func TestMultipleLatencyRequest(t *testing.T) {
 	}
 
 	wg.Wait()
-	tenv.Close()
 }
 
 func TestReconnectClient(t *testing.T) {
-	tenv, err := singleTestEnvironment(nil)
+	t.Parallel()
+
+	tt, err := tunneltest.Serve(singleHTTP(handlerEchoHTTP))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer tenv.Close()
+	defer tt.Close()
 
 	msg := "hello"
-	res, err := makeRequest(tenv.remoteListener.Addr().String(), msg)
+	res, err := echo(tt, msg)
 	if err != nil {
-		t.Errorf("make request: %s", err)
+		t.Fatalf("make request: %s", err)
 	}
 
 	if res != msg {
-		t.Errorf("expecting '%s', got '%s'", msg, res)
+		t.Fatalf("expecting '%s', got '%s'", msg, res)
 	}
+
+	client := tt.Clients["http"]
 
 	// close client, and start it again
-	tenv.client.Close()
+	client.Close()
 
-	go tenv.client.Start()
-	<-tenv.client.StartNotify()
+	go client.Start()
+	<-client.StartNotify()
 
 	msg = "helloagain"
-	res, err = makeRequest(tenv.remoteListener.Addr().String(), msg)
+	res, err = echo(tt, msg)
 	if err != nil {
 		t.Errorf("make request: %s", err)
 	}
@@ -179,59 +166,69 @@ func TestReconnectClient(t *testing.T) {
 	if res != msg {
 		t.Errorf("expecting '%s', got '%s'", msg, res)
 	}
-
 }
 
 func TestNoClient(t *testing.T) {
-	tenv, err := singleTestEnvironment(nil)
+	const expectedErr = "no client session established"
+	t.Parallel()
+
+	tt, err := tunneltest.Serve(singleHTTP(handlerEchoHTTP))
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer tt.Close()
 
 	// close client, this is the main point of the test
-	tenv.client.Close()
+	if err := tt.Clients["http"].Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	msg := "hello"
-	res, err := makeRequest(tenv.remoteListener.Addr().String(), msg)
+	res, err := echo(tt, msg)
 	if err != nil {
 		t.Errorf("make request: %s", err)
 	}
 
-	if res != errNoClientSession.Error() {
-		t.Errorf("Expecting '%s', got '%s'", "no client session established", res)
+	if res != expectedErr {
+		t.Errorf("Expecting '%s', got '%s'", expectedErr, res)
 	}
-	tenv.Close()
 }
 
 func TestNoLocalServer(t *testing.T) {
-	tenv, err := singleTestEnvironment(nil)
+	const expectedErr = "no local server"
+	t.Parallel()
+
+	tt, err := tunneltest.Serve(singleHTTP(handlerEchoHTTP))
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer tt.Close()
 
 	// close local listener, this is the main point of the test
-	tenv.localListener.Close()
+	tt.Listeners["http"][0].Close()
 
 	msg := "hello"
-	res, err := makeRequest(tenv.remoteListener.Addr().String(), msg)
+	res, err := echo(tt, msg)
 	if err != nil {
 		t.Errorf("make request: %s", err)
 	}
 
-	if res != "no local server" {
-		t.Errorf("Expecting %s, got %s", msg, res)
+	if res != expectedErr {
+		t.Errorf("Expecting %s, got %s", expectedErr, res)
 	}
-	tenv.Close()
 }
 
 func TestSingleRequest(t *testing.T) {
-	tenv, err := singleTestEnvironment(nil)
+	t.Parallel()
+
+	tt, err := tunneltest.Serve(singleHTTP(handlerEchoHTTP))
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer tt.Close()
 
 	msg := "hello"
-	res, err := makeRequest(tenv.remoteListener.Addr().String(), msg)
+	res, err := echo(tt, msg)
 	if err != nil {
 		t.Errorf("make request: %s", err)
 	}
@@ -239,22 +236,22 @@ func TestSingleRequest(t *testing.T) {
 	if res != msg {
 		t.Errorf("Expecting %s, got %s", msg, res)
 	}
-	tenv.Close()
 }
 
 func TestSingleLatencyRequest(t *testing.T) {
-	tenv, err := singleTestEnvironment(&testConfig{
-		localHandler: randomLatencyEcho(),
-	})
+	t.Parallel()
+
+	tt, err := tunneltest.Serve(singleHTTP(handlerLatencyEchoHTTP))
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer tt.Close()
 
 	// wait til the environment is ready, just for test
 	time.Sleep(time.Second * 2)
 
 	msg := "hello"
-	res, err := makeRequest(tenv.remoteListener.Addr().String(), msg)
+	res, err := echo(tt, msg)
 	if err != nil {
 		t.Errorf("make request: %s", err)
 	}
@@ -262,35 +259,4 @@ func TestSingleLatencyRequest(t *testing.T) {
 	if res != msg {
 		t.Errorf("Expecting %s, got %s", msg, res)
 	}
-	tenv.Close()
-}
-
-func makeRequest(serverAddr, msg string) (string, error) {
-	resp, err := http.Get("http://" + serverAddr + "/?echo=" + msg)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	res, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
-	}
-
-	return strings.TrimSpace(string(res)), nil
-}
-
-func echo() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		msg := r.URL.Query().Get("echo")
-		io.WriteString(w, msg)
-	})
-}
-
-func randomLatencyEcho() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(time.Duration(rand.Intn(2000)) * time.Millisecond)
-		msg := r.URL.Query().Get("echo")
-		io.WriteString(w, msg)
-	})
 }
