@@ -1,8 +1,8 @@
 package tunnel
 
 import (
-	"fmt"
 	"net"
+	"strconv"
 	"sync"
 	"sync/atomic"
 
@@ -21,11 +21,27 @@ type listener struct {
 	ips map[string]struct{}
 }
 
-func (vaddr *vaddrStorage) newListener(l net.Listener) *listener {
-	return &listener{
-		Listener:     l,
-		vaddrOptions: vaddr.vaddrOptions,
-		ips:          make(map[string]struct{}),
+type vaddrOptions struct {
+	connCh chan<- net.Conn
+	log    logging.Logger
+}
+
+type vaddrStorage struct {
+	*vaddrOptions
+
+	listeners map[net.Listener]*listener
+	ports     map[int]string    // port-based routing: maps port number to identifier
+	ips       map[string]string // ip-based routing: maps ip address to identifier
+
+	mu sync.RWMutex
+}
+
+func newVirtualAddrs(opts *vaddrOptions) *vaddrStorage {
+	return &vaddrStorage{
+		vaddrOptions: opts,
+		listeners:    make(map[net.Listener]*listener),
+		ports:        make(map[int]string),
+		ips:          make(map[string]string),
 	}
 }
 
@@ -50,7 +66,7 @@ func (l *listener) serve() {
 func (l *listener) localAddr() string {
 	if addr, ok := l.Addr().(*net.TCPAddr); ok {
 		if addr.IP.Equal(net.IPv4zero) {
-			return fmt.Sprintf("127.0.0.1:%d", addr.Port)
+			return net.JoinHostPort("127.0.0.1", strconv.Itoa(addr.Port))
 		}
 	}
 	return l.Addr().String()
@@ -64,42 +80,6 @@ func (l *listener) stop() {
 			conn.Close()
 		}
 	}
-}
-
-type vaddrStorage struct {
-	*vaddrOptions
-
-	listeners map[net.Listener]*listener
-	ports     map[int]string    // port-based routing: maps port number to identifier
-	ips       map[string]string // ip-based routing: maps ip address to identifier
-
-	mu sync.RWMutex
-}
-
-type vaddrOptions struct {
-	connCh chan<- net.Conn
-	log    logging.Logger
-}
-
-func newVirtualAddrs(opts *vaddrOptions) *vaddrStorage {
-	return &vaddrStorage{
-		vaddrOptions: opts,
-		listeners:    make(map[net.Listener]*listener),
-		ports:        make(map[int]string),
-		ips:          make(map[string]string),
-	}
-}
-
-func mustPort(l net.Listener) int {
-	_, port, err := parseHostPort(l.Addr().String())
-	if err != nil {
-		// This can happend when user passed custom type that
-		// implements net.Listener, which returns ill-formed
-		// net.Addr value.
-		panic("ill-formed net.Addr: " + err.Error())
-	}
-
-	return port
 }
 
 func (vaddr *vaddrStorage) Add(l net.Listener, ip net.IP, ident string) {
@@ -151,6 +131,14 @@ func (vaddr *vaddrStorage) Delete(l net.Listener, ip net.IP) {
 	}
 }
 
+func (vaddr *vaddrStorage) newListener(l net.Listener) *listener {
+	return &listener{
+		Listener:     l,
+		vaddrOptions: vaddr.vaddrOptions,
+		ips:          make(map[string]struct{}),
+	}
+}
+
 func (vaddr *vaddrStorage) getIdent(conn net.Conn) (string, bool) {
 	vaddr.mu.Lock()
 	defer vaddr.mu.Unlock()
@@ -169,4 +157,16 @@ func (vaddr *vaddrStorage) getIdent(conn net.Conn) (string, bool) {
 
 	ident, ok := vaddr.ports[port]
 	return ident, ok
+}
+
+func mustPort(l net.Listener) int {
+	_, port, err := parseHostPort(l.Addr().String())
+	if err != nil {
+		// This can happend when user passed custom type that
+		// implements net.Listener, which returns ill-formed
+		// net.Addr value.
+		panic("ill-formed net.Addr: " + err.Error())
+	}
+
+	return port
 }

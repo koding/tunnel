@@ -427,7 +427,7 @@ func (c *Client) proxyHTTP(port int) error {
 		buf := new(bytes.Buffer)
 		resp.Write(buf)
 		if _, err := io.Copy(remote, buf); err != nil {
-			c.log.Debug("copy in-mem response error: %s\n", err.Error())
+			c.log.Debug("copy in-mem response error: %s", err)
 		}
 		return nil
 	}
@@ -448,17 +448,17 @@ func (c *Client) join(local, remote net.Conn) {
 
 		n, err := io.Copy(dst, src)
 		if err != nil {
-			c.log.Debug("copy error: %s\n", err.Error())
+			c.log.Error("%s: copy error: %s", side, err)
 		}
 
 		if err := src.Close(); err != nil {
-			c.log.Debug("%s: close error: %s\n", side, err.Error())
+			c.log.Debug("%s: close error: %s", side, err)
 		}
 
 		// not for yamux streams, but for client to local server connections
 		if d, ok := dst.(*net.TCPConn); ok {
 			if err := d.CloseWrite(); err != nil {
-				c.log.Debug("%s: closeWrite error: %s\n", side, err.Error())
+				c.log.Debug("%s: closeWrite error: %s", side, err)
 			}
 		}
 
