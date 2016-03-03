@@ -74,7 +74,14 @@ func (l *listener) localAddr() string {
 
 func (l *listener) stop() {
 	if atomic.CompareAndSwapInt32(&l.done, 0, 1) {
-		// self-pipe to break out of serve loop
+		// stop is called when no more connections should be accepted by
+		// the user-provided listener; as we can't simple close the listener
+		// to not break the guarantee given by the (*Server).DeleteAddr
+		// method, we make a dummy connection to break out of serve loop.
+		// It is safe to make a dummy connection, as either the following
+		// dial will time out when the listener is busy accepting connections,
+		// or will get closed immadiately after idle listeners accepts connection
+		// and returns from the serve loop.
 		conn, err := net.DialTimeout("tcp", l.localAddr(), defaultTimeout)
 		if err == nil {
 			conn.Close()
