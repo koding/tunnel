@@ -23,6 +23,7 @@ import (
 
 var (
 	errNoClientSession = errors.New("no client session established")
+	defaultTimeout     = 10 * time.Second
 )
 
 // Server is responsible for proxying public connections to the client over a
@@ -42,6 +43,12 @@ type Server struct {
 
 	// virtualHosts is used to map public hosts to remote clients
 	virtualHosts vhostStorage
+
+	// virtualAddrs
+	virtualAddrs *vaddrStorage
+
+	// connCh is used to publish accepted connections for tcp tunnels.
+	connCh chan net.Conn
 
 	// onDisconnect contains the onDisconnect for each map
 	onDisconnect   map[string]func() error
@@ -82,15 +89,28 @@ func NewServer(cfg *ServerConfig) (*Server, error) {
 		log = cfg.Log
 	}
 
-	return &Server{
+	connCh := make(chan net.Conn)
+
+	opts := &vaddrOptions{
+		connCh: connCh,
+		log:    log,
+	}
+
+	s := &Server{
 		pending:      make(map[string]chan net.Conn),
 		sessions:     make(map[string]*yamux.Session),
 		onDisconnect: make(map[string]func() error),
 		virtualHosts: newVirtualHosts(),
+		virtualAddrs: newVirtualAddrs(opts),
 		controls:     newControls(),
 		yamuxConfig:  yamuxConfig,
+		connCh:       connCh,
 		log:          log,
-	}, nil
+	}
+
+	go s.serveTCP()
+
+	return s, nil
 }
 
 // ServeHTTP is a tunnel that creates an http/websocket tunnel between a
@@ -106,7 +126,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if err := s.handleHTTP(w, r); err != nil {
 		http.Error(w, err.Error(), 502)
-		return
 	}
 }
 
@@ -126,70 +145,24 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) error {
 		return fmt.Errorf("no virtual host available for %s", host)
 	}
 
-	// then grab the control connection that is associated with this identifier
-	control, ok := s.getControl(identifier)
-	if !ok {
-		return errNoClientSession
-	}
-
-	session, err := s.getSession(identifier)
-	if err != nil {
-		return err
-	}
-
 	// if someoone hits foo.example.com:8080, this should be proxied to
 	// localhost:8080, so send the port to the client so it knows how to proxy
 	// correctly. If no port is available, it's up to client how to intepret it
-	_, netPort, _ := net.SplitHostPort(r.Host)
-	port, err := strconv.Atoi(netPort)
+	_, port, err := parseHostPort(r.Host)
 	if err != nil {
 		// no need to return, just continue lazily, port will be 0, which in
 		// our case will be proxied to client's localservers port 80
 		s.log.Debug("No port available for '%s', sending port 80 to client", r.Host)
 	}
 
-	msg := controlMsg{
-		Action:    requestClientSession,
-		Protocol:  httpTransport,
-		LocalPort: port,
-	}
-
-	s.log.Debug("Sending control msg %+v", msg)
-
-	// ask client to open a session to us, so we can accept it
-	if err := control.send(msg); err != nil {
-		// we might have several issues here, either the stream is closed, or
-		// the session is going be shut down, the underlying connection might
-		// be broken. In all cases, it's not reliable anymore having a client
-		// session.
-		control.Close()
-		s.deleteControl(identifier)
-		return errNoClientSession
-	}
-
-	var stream net.Conn
-	defer func() {
-		if stream != nil {
-			s.log.Debug("Closing stream")
-			stream.Close()
-		}
-	}()
-
-	acceptStream := func() error {
-		stream, err = session.Accept()
+	stream, err := s.dial(identifier, httpTransport, port)
+	if err != nil {
 		return err
 	}
-
-	// if we don't receive anything from the client, we'll timeout
-	s.log.Debug("Waiting for session accept")
-	select {
-	case err := <-async(acceptStream):
-		if err != nil {
-			return err
-		}
-	case <-time.After(time.Second * 10):
-		return errors.New("timeout getting session")
-	}
+	defer func() {
+		s.log.Debug("Closing stream")
+		stream.Close()
+	}()
 
 	if err := r.Write(stream); err != nil {
 		return err
@@ -225,6 +198,109 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) error {
 
 	s.log.Debug("Response copy is finished")
 	return nil
+}
+
+func parseHostPort(addr string) (string, int, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return "", 0, err
+	}
+
+	n, err := strconv.ParseUint(port, 10, 16)
+	if err != nil {
+		return "", 0, err
+	}
+
+	return host, int(n), nil
+}
+
+func (s *Server) serveTCP() {
+	for conn := range s.connCh {
+		go s.serveTCPConn(conn)
+	}
+}
+
+func (s *Server) serveTCPConn(conn net.Conn) {
+	err := s.handleTCPConn(conn)
+	if err != nil {
+		s.log.Warning("failed to serve %q: %s", conn.RemoteAddr(), err)
+		conn.Close()
+	}
+}
+
+func (s *Server) handleTCPConn(conn net.Conn) error {
+	ident, ok := s.virtualAddrs.getIdent(conn)
+	if !ok {
+		return fmt.Errorf("no virtual address available for %s", conn.LocalAddr())
+	}
+
+	_, port, err := parseHostPort(conn.LocalAddr().String())
+	if err != nil {
+		return err
+	}
+
+	stream, err := s.dial(ident, tcpTransport, port)
+	if err != nil {
+		return err
+	}
+
+	go s.copy(conn, stream)
+	go s.copy(stream, conn)
+
+	return nil
+}
+
+func (s *Server) copy(dst, src net.Conn) {
+	s.log.Debug("tunneling %s -> %s", src.RemoteAddr(), dst.RemoteAddr())
+	n, err := io.Copy(dst, src)
+	s.log.Debug("tunneled %d bytes %s -> %s: %v", n, src.RemoteAddr(), dst.RemoteAddr(), err)
+}
+
+func (s *Server) dial(ident string, proto transportProtocol, port int) (net.Conn, error) {
+	control, ok := s.getControl(ident)
+	if !ok {
+		return nil, errNoClientSession
+	}
+
+	session, err := s.getSession(ident)
+	if err != nil {
+		return nil, err
+	}
+
+	msg := controlMsg{
+		Action:    requestClientSession,
+		Protocol:  proto,
+		LocalPort: port,
+	}
+
+	s.log.Debug("Sending control msg %+v", msg)
+
+	// ask client to open a session to us, so we can accept it
+	if err := control.send(msg); err != nil {
+		// we might have several issues here, either the stream is closed, or
+		// the session is going be shut down, the underlying connection might
+		// be broken. In all cases, it's not reliable anymore having a client
+		// session.
+		control.Close()
+		s.deleteControl(ident)
+		return nil, errNoClientSession
+	}
+
+	var stream net.Conn
+	acceptStream := func() error {
+		stream, err = session.Accept()
+		return err
+	}
+
+	// if we don't receive anything from the client, we'll timeout
+	s.log.Debug("Waiting for session accept")
+
+	select {
+	case err := <-async(acceptStream):
+		return stream, err
+	case <-time.After(defaultTimeout):
+		return nil, errors.New("timeout getting session")
+	}
 }
 
 // controlHandler is used to capture incoming tunnel connect requests into raw
@@ -389,6 +465,29 @@ func (s *Server) AddHost(host, identifier string) {
 // host is denied.
 func (s *Server) DeleteHost(host string) {
 	s.virtualHosts.DeleteHost(host)
+}
+
+// AddAddr starts accepting connections on listener l, routing every connection
+// to a tunnel client given by the identifier.
+//
+// When ip parameter is nil, all connections accepted from the listener are
+// routed to the tunnel client specified by the identifier (port-based routing).
+//
+// When ip parameter is non-nil, only those connections are routed whose local
+// address matches the specified ip (ip-based routing).
+//
+// If l listens on multiple interfaces it's desirable to call AddAddr multiple
+// times with the same l value but different ip one.
+func (s *Server) AddAddr(l net.Listener, ip net.IP, identifier string) {
+	s.virtualAddrs.Add(l, ip, identifier)
+}
+
+// DeleteAddr stops listening for connections on the given listener.
+//
+// Upon return no more connections will be tunneled, but as the method does not
+// close the listener, so any ongoing connection won't get interrupted.
+func (s *Server) DeleteAddr(l net.Listener, ip net.IP) {
+	s.virtualAddrs.Delete(l, ip)
 }
 
 func (s *Server) getIdentifier(host string) (string, bool) {
