@@ -167,6 +167,12 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) error {
 		s.log.Debug("No port available for '%s', sending port 80 to client", r.Host)
 	}
 
+	if isWebsocketConn(r) {
+		s.log.Debug("handling websocket connection")
+
+		return s.handleWSConn(w, r, identifier, port)
+	}
+
 	stream, err := s.dial(identifier, httpTransport, port)
 	if err != nil {
 		return err
@@ -194,8 +200,7 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) error {
 		}
 	}()
 
-	s.log.Debug("Response received, writing back to public connection")
-	s.log.Debug("%+v", resp)
+	s.log.Debug("Response received, writing back to public connection: %+v", resp)
 
 	copyHeader(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
@@ -208,22 +213,7 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) error {
 		}
 	}
 
-	s.log.Debug("Response copy is finished")
 	return nil
-}
-
-func parseHostPort(addr string) (string, int, error) {
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		return "", 0, err
-	}
-
-	n, err := strconv.ParseUint(port, 10, 16)
-	if err != nil {
-		return "", 0, err
-	}
-
-	return host, int(n), nil
 }
 
 func (s *Server) serveTCP() {
@@ -238,6 +228,49 @@ func (s *Server) serveTCPConn(conn net.Conn) {
 		s.log.Warning("failed to serve %q: %s", conn.RemoteAddr(), err)
 		conn.Close()
 	}
+}
+
+func (s *Server) handleWSConn(w http.ResponseWriter, r *http.Request, ident string, port int) error {
+	hj, ok := w.(http.Hijacker)
+	if !ok {
+		return errors.New("webserver doesn't support hijacking")
+	}
+
+	conn, _, err := hj.Hijack()
+	if err != nil {
+		return fmt.Errorf("hijack not possible: %s", err)
+	}
+
+	stream, err := s.dial(ident, wsTransport, port)
+	if err != nil {
+		return err
+	}
+
+	if err := r.Write(stream); err != nil {
+		err = errors.New("unable to write upgrade request: " + err.Error())
+		return nonil(err, stream.Close())
+	}
+
+	resp, err := http.ReadResponse(bufio.NewReader(stream), r)
+	if err != nil {
+		err = errors.New("unable to read upgrade response: " + err.Error())
+		return nonil(err, stream.Close())
+	}
+
+	if err := resp.Write(conn); err != nil {
+		err = errors.New("unable to write upgrade response: " + err.Error())
+		return nonil(err, stream.Close())
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go s.proxy(&wg, conn, stream)
+	go s.proxy(&wg, stream, conn)
+
+	wg.Wait()
+
+	return nonil(stream.Close(), conn.Close())
 }
 
 func (s *Server) handleTCPConn(conn net.Conn) error {
@@ -256,13 +289,20 @@ func (s *Server) handleTCPConn(conn net.Conn) error {
 		return err
 	}
 
-	go s.copy(conn, stream)
-	go s.copy(stream, conn)
+	var wg sync.WaitGroup
+	wg.Add(2)
 
-	return nil
+	go s.proxy(&wg, conn, stream)
+	go s.proxy(&wg, stream, conn)
+
+	wg.Wait()
+
+	return nonil(stream.Close(), conn.Close())
 }
 
-func (s *Server) copy(dst, src net.Conn) {
+func (s *Server) proxy(wg *sync.WaitGroup, dst, src net.Conn) {
+	defer wg.Done()
+
 	s.log.Debug("tunneling %s -> %s", src.RemoteAddr(), dst.RemoteAddr())
 	n, err := io.Copy(dst, src)
 	s.log.Debug("tunneled %d bytes %s -> %s: %v", n, src.RemoteAddr(), dst.RemoteAddr(), err)
@@ -550,10 +590,10 @@ func (s *Server) deleteSession(identifier string) {
 }
 
 func copyHeader(dst, src http.Header) {
-	for k, vv := range src {
-		for _, v := range vv {
-			dst.Add(k, v)
-		}
+	for k, v := range src {
+		vv := make([]string, len(v))
+		copy(vv, v)
+		dst[k] = vv
 	}
 }
 
@@ -573,6 +613,48 @@ func (s *Server) checkConnect(fn func(w http.ResponseWriter, r *http.Request) er
 			http.Error(w, err.Error(), 502)
 		}
 	})
+}
+
+func parseHostPort(addr string) (string, int, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return "", 0, err
+	}
+
+	n, err := strconv.ParseUint(port, 10, 16)
+	if err != nil {
+		return "", 0, err
+	}
+
+	return host, int(n), nil
+}
+
+func isWebsocketConn(r *http.Request) bool {
+	return r.Method == "GET" && headerContains(r.Header["Connection"], "upgrade") &&
+		headerContains(r.Header["Upgrade"], "websocket")
+}
+
+// headerContains is a copy of tokenListContainsValue from gorilla/websocket/util.go
+func headerContains(header []string, value string) bool {
+	for _, h := range header {
+		for _, v := range strings.Split(h, ",") {
+			if strings.EqualFold(strings.TrimSpace(v), value) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+func nonil(err ...error) error {
+	for _, e := range err {
+		if e != nil {
+			return e
+		}
+	}
+
+	return nil
 }
 
 func newLogger(name string, debug bool) logging.Logger {

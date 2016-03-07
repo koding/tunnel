@@ -475,7 +475,7 @@ func (c *Client) listenControl(ct *control) error {
 					}
 				}()
 
-			case httpTransport:
+			case wsTransport, httpTransport:
 				c.log.Debug("Received request to open a HTTP session to server")
 
 				go func() {
