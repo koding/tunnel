@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"sort"
 	"strconv"
 	"sync"
@@ -15,8 +14,6 @@ import (
 
 	"github.com/koding/tunnel"
 )
-
-var noDebug = os.Getenv("NO_DEBUG") == "1"
 
 func logf(format string, args ...interface{}) {
 	if testing.Verbose() {
@@ -98,9 +95,11 @@ type Tunnel struct {
 	LocalAddr string
 
 	// ClientIdent is an identifier of a client that have already
-	// registered a HTTP tunnel. If the Type is TypeTCP,
-	// instead of creating new client for this TCP tunnel,
-	// we add it to an existing client specified by the field.
+	// registered a HTTP tunnel and have established control connection.
+	//
+	// If the Type is TypeTCP, instead of creating new client
+	// for this TCP tunnel, we add it to an existing client
+	// specified by the field.
 	//
 	// Optional field for TCP tunnels.
 	// Ignored field for HTTP tunnels.
@@ -142,7 +141,7 @@ type TunnelTest struct {
 
 func NewTunnelTest() (*TunnelTest, error) {
 	cfg := &tunnel.ServerConfig{
-		Debug: testing.Verbose() && !noDebug,
+		Debug: testing.Verbose(),
 	}
 	s, err := tunnel.NewServer(cfg)
 	if err != nil {
@@ -218,7 +217,7 @@ func (tt *TunnelTest) serveSingle(ident string, t *Tunnel) (bool, error) {
 		ServerAddr:     tt.ServerAddr().String(),
 		LocalAddr:      l.Addr().String(),
 		FetchLocalAddr: tt.fetchLocalAddr,
-		Debug:          testing.Verbose() && !noDebug,
+		Debug:          testing.Verbose(),
 	}
 
 	// Register tunnel:
@@ -229,6 +228,8 @@ func (tt *TunnelTest) serveSingle(ident string, t *Tunnel) (bool, error) {
 	//
 	switch t.Type {
 	case TypeHTTP:
+		// TODO(rjeczalik): refactor to separate method
+
 		h, ok := t.Handler.(http.Handler)
 		if !ok {
 			h, ok = t.Handler.(http.HandlerFunc)
@@ -260,6 +261,8 @@ func (tt *TunnelTest) serveSingle(ident string, t *Tunnel) (bool, error) {
 		logf("registered HTTP tunnel: host=%s, ident=%s", cfg.LocalAddr, ident)
 
 	case TypeTCP:
+		// TODO(rjeczalik): refactor to separate method
+
 		h, ok := t.Handler.(func(net.Conn))
 		if !ok {
 			return false, fmt.Errorf("invalid handler type for %q tunnel: %T", ident, t.Handler)
@@ -348,12 +351,12 @@ func (tt *TunnelTest) Serve(tunnels map[string]*Tunnel) error {
 	// After 3 passes all of them must be started, otherwise the
 	// configuration is bad:
 	//
-	//   - first pass starts HTTP tunnels
-	//   - second pass starts TCP tunnels that rely on HTTP ones (t.ClientIdent)
-	//   - third pass starts TCP tunnels that rely on TCP ones (t.RemoteAddrIdent)
+	//   - first pass starts HTTP tunnels as new client tunnels
+	//   - second pass starts TCP tunnels that rely on on already existing client tunnels (t.ClientIdent)
+	//   - third pass starts TCP tunnels that rely on on already existing TCP tunnels (t.RemoteAddrIdent)
 	//
 	for i := 0; i < 3; i++ {
-		if err := tt.serveDeps(tunnels); err != nil {
+		if err := tt.popServedDeps(tunnels); err != nil {
 			return err
 		}
 	}
@@ -371,7 +374,7 @@ func (tt *TunnelTest) Serve(tunnels map[string]*Tunnel) error {
 	return nil
 }
 
-func (tt *TunnelTest) serveDeps(tunnels map[string]*Tunnel) error {
+func (tt *TunnelTest) popServedDeps(tunnels map[string]*Tunnel) error {
 	for ident, t := range tunnels {
 		ok, err := tt.serveSingle(ident, t)
 		if err != nil {
