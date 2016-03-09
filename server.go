@@ -50,9 +50,12 @@ type Server struct {
 	// connCh is used to publish accepted connections for tcp tunnels.
 	connCh chan net.Conn
 
+	// onConnect contains client callbacks called when control
+	// session is established for a client with given identifier
+	onConnect *callbacks
+
 	// onDisconnect contains the onDisconnect for each map
-	onDisconnect   map[string]func() error
-	onDisconnectMu sync.Mutex // protects onDisconnects
+	onDisconnect *callbacks
 
 	// yamuxConfig is passed to new yamux.Session's
 	yamuxConfig *yamux.Config
@@ -99,7 +102,8 @@ func NewServer(cfg *ServerConfig) (*Server, error) {
 	s := &Server{
 		pending:      make(map[string]chan net.Conn),
 		sessions:     make(map[string]*yamux.Session),
-		onDisconnect: make(map[string]func() error),
+		onConnect:    newCallbacks("OnConnect"),
+		onDisconnect: newCallbacks("OnDisconnect"),
 		virtualHosts: newVirtualHosts(),
 		virtualAddrs: newVirtualAddrs(opts),
 		controls:     newControls(),
@@ -405,6 +409,10 @@ func (s *Server) controlHandler(w http.ResponseWriter, r *http.Request) (ctErr e
 
 // listenControl listens to messages coming from the client.
 func (s *Server) listenControl(ct *control) {
+	if err := s.onConnect.call(ct.identifier); err != nil {
+		s.log.Error("OnConnect: error calling callback for %q: %s", ct.identifier, err)
+	}
+
 	for {
 		var msg map[string]interface{}
 		err := ct.dec.Decode(&msg)
@@ -418,8 +426,8 @@ func (s *Server) listenControl(ct *control) {
 			// don't forget to cleanup anything
 			s.deleteControl(ct.identifier)
 			s.deleteSession(ct.identifier)
-			if err := s.callOnDisconect(ct.identifier); err != nil {
-				s.log.Error("onDisconnect (%s) err: %s", ct.identifier, err)
+			if err := s.onDisconnect.call(ct.identifier); err != nil {
+				s.log.Error("OnDisconnect: error calling callback for %q: %s", ct.identifier, err)
 			}
 
 			if err != io.EOF {
@@ -435,33 +443,18 @@ func (s *Server) listenControl(ct *control) {
 	}
 }
 
+// OnConnect invokes a callback for client with given identifier,
+// when it establishes a control sessin.
+func (s *Server) OnConnect(identifier string, fn func() error) {
+	s.onConnect.add(identifier, fn)
+}
+
 // OnDisconnect calls the function when the client connected with the
 // associated identifier disconnects from the server. After a client is
 // disconnected, the associated function is alro removed and needs to be
 // readded again.
 func (s *Server) OnDisconnect(identifier string, fn func() error) {
-	s.onDisconnectMu.Lock()
-	s.onDisconnect[identifier] = fn
-	s.onDisconnectMu.Unlock()
-}
-
-func (s *Server) callOnDisconect(identifier string) error {
-	s.onDisconnectMu.Lock()
-	defer s.onDisconnectMu.Unlock()
-
-	fn, ok := s.onDisconnect[identifier]
-	if !ok {
-		return nil
-	}
-
-	// delete after we are finished with it
-	delete(s.onDisconnect, identifier)
-
-	if fn == nil {
-		return errors.New("onDisconnect function for '%s' is set to nil")
-	}
-
-	return fn()
+	s.onDisconnect.add(identifier, fn)
 }
 
 // AddHost adds the given virtual host and maps it to the identifier.

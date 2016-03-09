@@ -5,7 +5,6 @@ import (
 	"strconv"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/koding/tunnel"
 	"github.com/koding/tunnel/tunneltest"
@@ -199,9 +198,6 @@ func TestSingleLatencyRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer tt.Close()
-
-	// wait til the environment is ready, just for test
-	time.Sleep(time.Second * 2)
 
 	msg := "hello"
 	res, err := echoHTTP(tt, msg)
