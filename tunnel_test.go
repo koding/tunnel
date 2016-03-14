@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/koding/tunnel"
 	"github.com/koding/tunnel/tunneltest"
 )
 
@@ -107,14 +108,36 @@ func TestReconnectClient(t *testing.T) {
 func TestNoClient(t *testing.T) {
 	const expectedErr = "no client session established"
 
-	tt, err := tunneltest.Serve(singleHTTP(handlerEchoHTTP))
+	rec := NewStateRecorder()
+
+	tt, err := tunneltest.Serve(singleRecHTTP(handlerEchoHTTP, rec.C()))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer tt.Close()
 
+	states := []tunnel.ClientState{
+		tunnel.ClientStarted,
+		tunnel.ClientConnecting,
+		tunnel.ClientConnected,
+	}
+
+	if err := rec.WaitTransitions(states...); err != nil {
+		t.Fatal(err)
+	}
+
 	// close client, this is the main point of the test
 	if err := tt.Clients["http"].Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	states = []tunnel.ClientState{
+		tunnel.ClientConnected,
+		tunnel.ClientDisconnected,
+		tunnel.ClientClosed,
+	}
+
+	if err := rec.WaitTransitions(states...); err != nil {
 		t.Fatal(err)
 	}
 
@@ -326,7 +349,7 @@ func TestMultipleStreamTCP(t *testing.T) {
 		for j, ident := range clients {
 			go func(ident string, i, j int) {
 				defer wg.Done()
-				msg := "hello" + strconv.Itoa(i+j)
+				msg := fmt.Sprintf("hello_%d_client_%d", j, i)
 				res, err := echoTCPIdent(tt, msg, ident)
 				if err != nil {
 					t.Errorf("echoTCP: %s", err)
