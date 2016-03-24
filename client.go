@@ -122,6 +122,9 @@ type ClientConfig struct {
 	// by the library.
 	StateChanges chan<- *ClientStateChange
 
+	// Custom backoff policy. If nil backoff.NewExponentialBackOff() will be used.
+	RedialBackoff backoff.BackOff
+
 	// YamuxConfig defines the config which passed to every new yamux.Session. If nil
 	// yamux.DefaultConfig() is used.
 	YamuxConfig *yamux.Config
@@ -165,14 +168,20 @@ func NewClient(cfg *ClientConfig) (*Client, error) {
 		return nil, err
 	}
 
-	forever := backoff.NewExponentialBackOff()
-	forever.MaxElapsedTime = 365 * 24 * time.Hour // 1 year
+	var bo backoff.BackOff
+	if cfg.RedialBackoff != nil {
+		bo = cfg.RedialBackoff
+	} else {
+		ebo := backoff.NewExponentialBackOff()
+		ebo.MaxElapsedTime = 0 // never stop
+		bo = ebo
+	}
 
 	client := &Client{
 		config:        cfg,
 		log:           log,
 		yamuxConfig:   yamuxConfig,
-		redialBackoff: forever,
+		redialBackoff: bo,
 		startNotify:   make(chan bool, 1),
 	}
 
