@@ -206,9 +206,9 @@ func (c *Client) Start() {
 	c.redialBackoff.Reset()
 	var lastErr error
 	for {
-		c.changeState(ClientConnecting, lastErr)
+		prev := c.changeState(ClientConnecting, lastErr)
 
-		if c.isRetry() {
+		if c.isRetry(prev) {
 			time.Sleep(c.redialBackoff.NextBackOff())
 		}
 
@@ -283,8 +283,8 @@ func (c *Client) Close() error {
 	return nil
 }
 
-func (c *Client) changeState(state ClientState, err error) {
-	prev := atomic.LoadUint32((*uint32)(&c.state))
+func (c *Client) changeState(state ClientState, err error) (prev ClientState) {
+	prev = ClientState(atomic.LoadUint32((*uint32)(&c.state)))
 
 	if c.config.StateChanges != nil {
 		change := &ClientStateChange{
@@ -300,10 +300,12 @@ func (c *Client) changeState(state ClientState, err error) {
 	}
 
 	atomic.CompareAndSwapUint32((*uint32)(&c.state), uint32(prev), uint32(state))
+
+	return prev
 }
 
-func (c *Client) isRetry() bool {
-	return c.state != ClientStarted && c.state != ClientClosed
+func (c *Client) isRetry(state ClientState) bool {
+	return state != ClientStarted && state != ClientClosed
 }
 
 func (c *Client) connect(identifier, serverAddr string) error {
