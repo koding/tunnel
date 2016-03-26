@@ -65,7 +65,8 @@ type Client struct {
 	closed      bool       // if client calls Close() and quits
 	startNotify chan bool  // notifies if client established a conn to server
 
-	reqWg sync.WaitGroup
+	reqWg  sync.WaitGroup
+	ctrlWg sync.WaitGroup
 
 	// redialBackoff is used to reconnect in exponential backoff intervals
 	redialBackoff backoff.BackOff
@@ -344,13 +345,14 @@ func (c *Client) connect(identifier, serverAddr string) error {
 		return fmt.Errorf("proxy server: %s. err: %s", resp.Status, string(out))
 	}
 
+	c.ctrlWg.Wait() // wait until previous listenControl observes disconnection
+
 	c.session, err = yamux.Client(conn, c.yamuxConfig)
 	if err != nil {
 		return err
 	}
 
 	var stream net.Conn
-
 	openStream := func() error {
 		// this is blocking until client opens a session to us
 		stream, err = c.session.Open()
@@ -405,6 +407,9 @@ func (c *Client) connect(identifier, serverAddr string) error {
 }
 
 func (c *Client) listenControl(ct *control) error {
+	c.ctrlWg.Add(1)
+	defer c.ctrlWg.Done()
+
 	c.changeState(ClientConnected, nil)
 
 	for {
