@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/koding/tunnel"
 )
@@ -342,8 +343,21 @@ func (tt *TunnelTest) addClient(ident string, cfg *tunnel.ClientConfig) error {
 		return err
 	}
 
+	done := make(chan struct{})
+
+	tt.Server.OnConnect(ident, func() error {
+		close(done)
+		return nil
+	})
+
 	go c.Start()
 	<-c.StartNotify()
+
+	select {
+	case <-time.After(10 * time.Second):
+		return errors.New("timed out after 10s waiting on client to establish control conn")
+	case <-done:
+	}
 
 	tt.Clients[ident] = c
 	return nil
