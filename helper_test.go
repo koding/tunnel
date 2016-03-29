@@ -17,6 +17,8 @@ import (
 
 	"github.com/koding/tunnel"
 	"github.com/koding/tunnel/tunneltest"
+
+	"github.com/gorilla/websocket"
 )
 
 func init() {
@@ -129,6 +131,27 @@ func (rec *StateRecorder) States() []*tunnel.ClientStateChange {
 	return states
 }
 
+var upgrader = websocket.Upgrader{
+	ReadBufferSize:  1024,
+	WriteBufferSize: 1024,
+}
+
+type EchoMessage struct {
+	Value string `json:"value,omitempty"`
+	Close bool   `json:"close,omitempty"`
+}
+
+var timeout = 10 * time.Second
+
+var dialer = &websocket.Dialer{
+	ReadBufferSize:   1024,
+	WriteBufferSize:  1024,
+	HandshakeTimeout: timeout,
+	NetDial: func(_, addr string) (net.Conn, error) {
+		return net.DialTimeout("tcp4", addr, timeout)
+	},
+}
+
 func echoHTTP(tt *tunneltest.TunnelTest, echo string) (string, error) {
 	req := tt.Request("http", url.Values{"echo": []string{echo}})
 	if req == nil {
@@ -185,8 +208,62 @@ func echoTCPIdent(tt *tunneltest.TunnelTest, echo, ident string) (string, error)
 	}
 }
 
+func websocketDial(tt *tunneltest.TunnelTest, ident string) (*websocket.Conn, error) {
+	req := tt.Request(ident, nil)
+	if req == nil {
+		return nil, fmt.Errorf("no client found for ident %q", ident)
+	}
+
+	h := http.Header{"Host": {req.Host}}
+	wsurl := fmt.Sprintf("ws://%s", tt.ServerAddr())
+
+	conn, _, err := dialer.Dial(wsurl, h)
+	return conn, err
+}
+
 func sleep() {
 	time.Sleep(time.Duration(rand.Intn(2000)) * time.Millisecond)
+}
+
+func handlerEchoWS(sleepFn func()) func(w http.ResponseWriter, r *http.Request) error {
+	return func(w http.ResponseWriter, r *http.Request) (e error) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return err
+		}
+		defer func() {
+			err := conn.Close()
+			if e == nil {
+				e = err
+			}
+		}()
+
+		if sleepFn != nil {
+			sleepFn()
+		}
+
+		for {
+			var msg EchoMessage
+			err := conn.ReadJSON(&msg)
+			if err != nil {
+				return fmt.Errorf("ReadJSON error: %s", err)
+			}
+
+			if sleepFn != nil {
+				sleepFn()
+			}
+
+			err = conn.WriteJSON(&msg)
+			if err != nil {
+				return fmt.Errorf("WriteJSON error: %s", err)
+			}
+
+			if msg.Close {
+				return nil
+			}
+		}
+	}
 }
 
 func handlerEchoHTTP(w http.ResponseWriter, r *http.Request) {

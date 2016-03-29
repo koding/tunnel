@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"sort"
 	"strconv"
 	"sync"
@@ -15,6 +16,37 @@ import (
 
 	"github.com/koding/tunnel"
 )
+
+var debugNet = os.Getenv("DEBUGNET") == "1"
+
+type dbgListener struct {
+	net.Listener
+}
+
+func (l dbgListener) Accept() (net.Conn, error) {
+	conn, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+
+	return dbgConn{conn}, nil
+}
+
+type dbgConn struct {
+	net.Conn
+}
+
+func (c dbgConn) Read(p []byte) (int, error) {
+	n, err := c.Conn.Read(p)
+	os.Stderr.Write(p)
+	return n, err
+}
+
+func (c dbgConn) Write(p []byte) (int, error) {
+	n, err := c.Conn.Write(p)
+	os.Stderr.Write(p)
+	return n, err
+}
 
 func logf(format string, args ...interface{}) {
 	if testing.Verbose() {
@@ -143,6 +175,7 @@ type TunnelTest struct {
 	Listeners map[string][2]net.Listener // [0] is local listener, [1] is remote one (for TCP tunnels)
 	Addrs     []*net.TCPAddr
 	Tunnels   map[string]*Tunnel
+	DebugNet  bool // for debugging network communication
 
 	mu sync.Mutex // protects Listeners
 }
@@ -156,9 +189,13 @@ func NewTunnelTest() (*TunnelTest, error) {
 		return nil, err
 	}
 
-	l, err := net.Listen("tcp", "0.0.0.0:0")
+	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, err
+	}
+
+	if debugNet {
+		l = dbgListener{l}
 	}
 
 	addrs, err := UsableAddrs()
@@ -174,6 +211,7 @@ func NewTunnelTest() (*TunnelTest, error) {
 		Listeners: map[string][2]net.Listener{"": {l, nil}},
 		Addrs:     addrs,
 		Tunnels:   make(map[string]*Tunnel),
+		DebugNet:  debugNet,
 	}, nil
 }
 
@@ -218,6 +256,10 @@ func (tt *TunnelTest) serveSingle(ident string, t *Tunnel) (bool, error) {
 	l, err := net.Listen("tcp", t.LocalAddr)
 	if err != nil {
 		return false, fmt.Errorf("failed to listen on %q for %q tunnel: %s", t.LocalAddr, ident, err)
+	}
+
+	if tt.DebugNet {
+		l = dbgListener{l}
 	}
 
 	cfg := &tunnel.ClientConfig{
@@ -459,7 +501,6 @@ func (tt *TunnelTest) Addr(ident string) net.Addr {
 func (tt *TunnelTest) Request(ident string, query url.Values) *http.Request {
 	l, ok := tt.Listeners[ident]
 	if !ok {
-		fmt.Printf("%# v\n", tt.Listeners)
 		return nil
 	}
 

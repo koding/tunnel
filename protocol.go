@@ -25,6 +25,7 @@ type transportProtocol int
 const (
 	httpTransport transportProtocol = iota + 1
 	tcpTransport
+	wsTransport
 )
 
 type controlMsg struct {
