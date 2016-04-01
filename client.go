@@ -130,6 +130,14 @@ type ClientConfig struct {
 	// Log defines the logger. If nil a default logging.Logger is used.
 	Log logging.Logger
 
+	// Dial provides custom transport layer for client server communication.
+	//
+	// If nil, default implementation is to return net.Dial("tcp", address).
+	//
+	// It can be used for connection monitoring, setting different timeouts or
+	// securing the connection.
+	Dial func (network, address string) (net.Conn, error)
+
 	// StateChanges receives state transition details each time client
 	// connection state changes. The channel is expected to be sufficiently
 	// buffered to keep up with event pace.
@@ -347,15 +355,16 @@ func (c *Client) isRetry(state ClientState) bool {
 }
 
 func (c *Client) connect(identifier, serverAddr string) error {
-	c.log.Debug("Trying to connect to '%s' with identifier '%s'", serverAddr, identifier)
-	conn, err := net.Dial("tcp", serverAddr)
+	c.log.Debug("Trying to connect to %q with identifier %q", serverAddr, identifier)
+
+	conn, err := c.dial(serverAddr)
 	if err != nil {
 		return err
 	}
 
-	remoteAddr := fmt.Sprintf("http://%s%s", conn.RemoteAddr(), controlPath)
-	c.log.Debug("CONNECT to '%s'", remoteAddr)
-	req, err := http.NewRequest("CONNECT", remoteAddr, nil)
+	remoteUrl := controlUrl(conn)
+	c.log.Debug("CONNECT to %q", remoteUrl)
+	req, err := http.NewRequest("CONNECT", remoteUrl, nil)
 	if err != nil {
 		return fmt.Errorf("CONNECT %s", err)
 	}
@@ -441,6 +450,14 @@ func (c *Client) connect(identifier, serverAddr string) error {
 	c.mu.Unlock()
 
 	return c.listenControl(ct)
+}
+
+func (c *Client) dial(serverAddr string) (net.Conn, error) {
+	if c.config.Dial != nil {
+		return c.config.Dial("tcp", serverAddr)
+	}
+
+	return net.Dial("tcp", serverAddr)
 }
 
 func (c *Client) listenControl(ct *control) error {

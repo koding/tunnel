@@ -1,7 +1,9 @@
 package tunnel
 
 import (
+	"crypto/tls"
 	"fmt"
+	"net"
 	"sync"
 	"time"
 
@@ -98,4 +100,20 @@ func (c *callbacks) call(ident string) error {
 	}
 
 	return fn()
+}
+
+// Returns server control url as a string. Reads scheme and remote address from connection.
+func controlUrl(conn net.Conn) (string) {
+	return fmt.Sprint(scheme(conn), "://", conn.RemoteAddr(), controlPath)
+}
+
+func scheme(conn net.Conn) (scheme string) {
+	switch conn.(type) {
+	case *tls.Conn:
+		scheme = "https"
+	default:
+		scheme = "http"
+	}
+
+	return
 }
