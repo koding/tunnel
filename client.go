@@ -136,7 +136,7 @@ type ClientConfig struct {
 	//
 	// It can be used for connection monitoring, setting different timeouts or
 	// securing the connection.
-	Dial func (network, address string) (net.Conn, error)
+	Dial func(network, address string) (net.Conn, error)
 
 	// StateChanges receives state transition details each time client
 	// connection state changes. The channel is expected to be sufficiently
@@ -366,36 +366,39 @@ func (c *Client) connect(identifier, serverAddr string) error {
 	c.log.Debug("CONNECT to %q", remoteUrl)
 	req, err := http.NewRequest("CONNECT", remoteUrl, nil)
 	if err != nil {
-		return fmt.Errorf("CONNECT %s", err)
+		return fmt.Errorf("error creating request to %s: %s", remoteUrl, err)
 	}
 
 	req.Header.Set(xKTunnelIdentifier, identifier)
+
 	c.log.Debug("Writing request to TCP: %+v", req)
+
 	if err := req.Write(conn); err != nil {
-		return err
+		return fmt.Errorf("writing CONNECT request to %s failed: %s", req.URL, err)
 	}
 
 	c.log.Debug("Reading response from TCP")
+
 	resp, err := http.ReadResponse(bufio.NewReader(conn), req)
 	if err != nil {
-		return fmt.Errorf("read response %s", err)
+		return fmt.Errorf("reading CONNECT response from %s failed: %s", req.URL, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 && resp.Status != connected {
 		out, err := ioutil.ReadAll(resp.Body)
 		if err != nil {
-			return err
+			return fmt.Errorf("tunnel server error: status=%d, error=%s", resp.StatusCode, err)
 		}
 
-		return fmt.Errorf("proxy server: %s. err: %s", resp.Status, string(out))
+		return fmt.Errorf("tunnel server error: status=%d, body=%s", resp.StatusCode, string(out))
 	}
 
 	c.ctrlWg.Wait() // wait until previous listenControl observes disconnection
 
 	c.session, err = yamux.Client(conn, c.yamuxConfig)
 	if err != nil {
-		return err
+		return fmt.Errorf("session initialization failed: %s", err)
 	}
 
 	var stream net.Conn
@@ -409,7 +412,7 @@ func (c *Client) connect(identifier, serverAddr string) error {
 	select {
 	case err := <-async(openStream):
 		if err != nil {
-			return err
+			return fmt.Errorf("waiting for session to open failed: %s", err)
 		}
 	case <-time.After(time.Second * 10):
 		if stream != nil {
@@ -419,16 +422,16 @@ func (c *Client) connect(identifier, serverAddr string) error {
 	}
 
 	if _, err := stream.Write([]byte(ctHandshakeRequest)); err != nil {
-		return err
+		return fmt.Errorf("writing handshake request failed: %s", err)
 	}
 
 	buf := make([]byte, len(ctHandshakeResponse))
 	if _, err := stream.Read(buf); err != nil {
-		return err
+		return fmt.Errorf("reading handshake response failed: %s", err)
 	}
 
 	if string(buf) != ctHandshakeResponse {
-		return fmt.Errorf("handshake aborted. got: %s", string(buf))
+		return fmt.Errorf("invalid handshake response, received: %s", string(buf))
 	}
 
 	ct := newControl(stream)
@@ -475,7 +478,7 @@ func (c *Client) listenControl(ct *control) error {
 			c.session.Close()
 			c.changeState(ClientDisconnected, err)
 
-			return err
+			return fmt.Errorf("failure decoding control message: %s", err)
 		}
 
 		c.log.Debug("Received control msg %+v", msg)
