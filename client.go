@@ -256,6 +256,16 @@ func (c *Client) Start() {
 			}
 
 			time.Sleep(dur)
+
+			// exit if closed
+			c.mu.Lock()
+			if c.closed {
+				c.mu.Unlock()
+
+				c.changeState(ClientClosed, lastErr)
+				return
+			}
+			c.mu.Unlock()
 		}
 
 		identifier, err := fetchIdent()
@@ -309,6 +319,10 @@ func (c *Client) StartNotify() <-chan bool {
 
 // Close closes the client and shutdowns the connection to the tunnel server
 func (c *Client) Close() error {
+	c.mu.Lock()
+	c.closed = true
+	c.mu.Unlock()
+
 	if c.session == nil {
 		return errors.New("session is not initialized")
 	}
@@ -316,10 +330,6 @@ func (c *Client) Close() error {
 	if err := c.session.GoAway(); err != nil {
 		return err
 	}
-
-	c.mu.Lock()
-	c.closed = true
-	c.mu.Unlock()
 
 	c.reqWg.Wait() // wait until all connections are finished
 	if err := c.session.Close(); err != nil {
