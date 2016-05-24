@@ -76,9 +76,9 @@ type Client struct {
 	yamuxConfig *yamux.Config
 	log         logging.Logger
 
-	mu          sync.Mutex // guards the following
-	closed      bool       // if client calls Close() and quits
-	startNotify chan bool  // notifies if client established a conn to server
+	closed        bool         // if client calls Close() and quits
+	closedMu      sync.RWMutex // guards closed flag
+	startNotify   chan bool    // notifies if client established a conn to server
 
 	reqWg  sync.WaitGroup
 	ctrlWg sync.WaitGroup
@@ -246,26 +246,18 @@ func (c *Client) Start() {
 		if c.isRetry(prev) {
 			dur := c.redialBackoff.NextBackOff()
 			if dur < 0 {
-				c.mu.Lock()
-				c.closed = true
-				c.mu.Unlock()
-
+				c.setClosed(true)
 				c.changeState(ClientClosed, ErrRedialAborted)
-
 				return
 			}
 
 			time.Sleep(dur)
 
 			// exit if closed
-			c.mu.Lock()
-			if c.closed {
-				c.mu.Unlock()
-
+			if c.isClosed() {
 				c.changeState(ClientClosed, lastErr)
 				return
 			}
-			c.mu.Unlock()
 		}
 
 		identifier, err := fetchIdent()
@@ -286,13 +278,13 @@ func (c *Client) Start() {
 		// retrieving it (if any), so it doesn't block during connect, when the
 		// client was closed and started again, and startNotify was never
 		// listened to.
-		c.mu.Lock()
+		c.closedMu.Lock()
 		c.closed = false
 		select {
 		case <-c.startNotify:
 		default:
 		}
-		c.mu.Unlock()
+		c.closedMu.Unlock()
 
 		if err := c.connect(identifier, serverAddr); err != nil {
 			lastErr = err
@@ -300,14 +292,10 @@ func (c *Client) Start() {
 		}
 
 		// exit if closed
-		c.mu.Lock()
-		if c.closed {
-			c.mu.Unlock()
-
+		if c.isClosed() {
 			c.changeState(ClientClosed, lastErr)
 			return
 		}
-		c.mu.Unlock()
 	}
 }
 
@@ -319,9 +307,7 @@ func (c *Client) StartNotify() <-chan bool {
 
 // Close closes the client and shutdowns the connection to the tunnel server
 func (c *Client) Close() error {
-	c.mu.Lock()
-	c.closed = true
-	c.mu.Unlock()
+	c.setClosed(true)
 
 	if c.session == nil {
 		return errors.New("session is not initialized")
@@ -337,6 +323,18 @@ func (c *Client) Close() error {
 	}
 
 	return nil
+}
+
+// isClosed securely checks if client is marked as closed.
+func (c *Client) isClosed() bool {
+	c.closedMu.RLock(); defer c.closedMu.RUnlock()
+	return c.closed
+}
+
+// setClosed securely marks client as closed (or not closed).
+func (c *Client) setClosed(closed bool) {
+	c.closedMu.Lock(); defer c.closedMu.Unlock()
+	c.closed = closed
 }
 
 func (c *Client) changeState(state ClientState, err error) (prev ClientState) {
@@ -448,8 +446,8 @@ func (c *Client) connect(identifier, serverAddr string) error {
 	c.log.Debug("client has started successfully.")
 	c.redialBackoff.Reset() // we successfully connected, so we can reset the backoff
 
-	c.mu.Lock()
-	if c.startNotify != nil && !c.closed {
+	c.closedMu.RLock()
+	if !c.closed && c.startNotify != nil {
 		c.log.Debug("sending ok to startNotify chan")
 		select {
 		case c.startNotify <- true:
@@ -458,9 +456,10 @@ func (c *Client) connect(identifier, serverAddr string) error {
 			// StartNotify(). This is OK, we shouldn't except it the consumer
 			// to read from this channel. It's optional, so we just drop the
 			// signal.
+			c.log.Debug("startNotify message was dropped")
 		}
 	}
-	c.mu.Unlock()
+	c.closedMu.RUnlock()
 
 	return c.listenControl(ct)
 }
