@@ -76,9 +76,16 @@ type Client struct {
 	yamuxConfig *yamux.Config
 	log         logging.Logger
 
-	closed        bool         // if client calls Close() and quits
-	closedMu      sync.RWMutex // guards closed flag
-	startNotify   chan bool    // notifies if client established a conn to server
+	// startNotify is a chanel user can get to be notified when client is
+	// connected to the server. The preferred way of doing this however,
+	// would be using StateChanges in ClientConfig where user can provide
+	// his own channel.
+	startNotify   chan bool
+	// closed is a flag set when client calls Close() and quits.
+	closed        bool
+	// closedMu guards both closed flag and startNotify channel. Since library
+	// owns the channel it's cleared when trying to reconnect.
+	closedMu      sync.RWMutex
 
 	reqWg  sync.WaitGroup
 	ctrlWg sync.WaitGroup
@@ -274,17 +281,7 @@ func (c *Client) Start() {
 			continue
 		}
 
-		// mark it as not closed. Also empty the value inside the chan by
-		// retrieving it (if any), so it doesn't block during connect, when the
-		// client was closed and started again, and startNotify was never
-		// listened to.
-		c.closedMu.Lock()
-		c.closed = false
-		select {
-		case <-c.startNotify:
-		default:
-		}
-		c.closedMu.Unlock()
+		c.setClosed(false)
 
 		if err := c.connect(identifier, serverAddr); err != nil {
 			lastErr = err
@@ -297,12 +294,6 @@ func (c *Client) Start() {
 			return
 		}
 	}
-}
-
-// StartNotify returns a channel that receives a single value when the client
-// established a successfull connection to the server.
-func (c *Client) StartNotify() <-chan bool {
-	return c.startNotify
 }
 
 // Close closes the client and shutdowns the connection to the tunnel server
@@ -331,10 +322,46 @@ func (c *Client) isClosed() bool {
 	return c.closed
 }
 
-// setClosed securely marks client as closed (or not closed).
+// setClosed securely marks client as closed (or not closed). If not closed
+// also empty the value inside the startNotify channel by retrieving it (if any),
+// so it doesn't block during connect, when the client was closed and started again,
+// and startNotify was never listened to.
 func (c *Client) setClosed(closed bool) {
 	c.closedMu.Lock(); defer c.closedMu.Unlock()
 	c.closed = closed
+
+	if !closed {
+		// clear channel
+		select {
+		case <-c.startNotify:
+		default:
+		}
+	}
+}
+
+// startNotifyIfNeeded sends ok to startNotify channel if it's listened to.
+// This function is called by connect when connection was successful.
+func (c *Client) startNotifyIfNeeded() {
+	c.closedMu.RLock()
+	if !c.closed {
+		c.log.Debug("sending ok to startNotify chan")
+		select {
+		case c.startNotify <- true:
+		default:
+		// reaching here means the client never read the signal via
+		// StartNotify(). This is OK, we shouldn't except it the consumer
+		// to read from this channel. It's optional, so we just drop the
+		// signal.
+			c.log.Debug("startNotify message was dropped")
+		}
+	}
+	c.closedMu.RUnlock()
+}
+
+// StartNotify returns a channel that receives a single value when the client
+// established a successful connection to the server.
+func (c *Client) StartNotify() <-chan bool {
+	return c.startNotify
 }
 
 func (c *Client) changeState(state ClientState, err error) (prev ClientState) {
@@ -446,20 +473,7 @@ func (c *Client) connect(identifier, serverAddr string) error {
 	c.log.Debug("client has started successfully.")
 	c.redialBackoff.Reset() // we successfully connected, so we can reset the backoff
 
-	c.closedMu.RLock()
-	if !c.closed && c.startNotify != nil {
-		c.log.Debug("sending ok to startNotify chan")
-		select {
-		case c.startNotify <- true:
-		default:
-			// reaching here means the client never read the signal via
-			// StartNotify(). This is OK, we shouldn't except it the consumer
-			// to read from this channel. It's optional, so we just drop the
-			// signal.
-			c.log.Debug("startNotify message was dropped")
-		}
-	}
-	c.closedMu.RUnlock()
+	c.startNotifyIfNeeded()
 
 	return c.listenControl(ct)
 }
