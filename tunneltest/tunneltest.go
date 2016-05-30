@@ -77,8 +77,7 @@ func parseHostPort(addr string) (string, int, error) {
 	return host, int(n), nil
 }
 
-// UsableAddrs returns all tcp addresses that we can bind a listener
-// to.
+// UsableAddrs returns all tcp addresses that we can bind a listener to.
 func UsableAddrs() ([]*net.TCPAddr, error) {
 	addrs, err := net.InterfaceAddrs()
 	if err != nil {
@@ -170,19 +169,23 @@ type Tunnel struct {
 }
 
 type TunnelTest struct {
-	Server    *tunnel.Server
-	Clients   map[string]*tunnel.Client
-	Listeners map[string][2]net.Listener // [0] is local listener, [1] is remote one (for TCP tunnels)
-	Addrs     []*net.TCPAddr
-	Tunnels   map[string]*Tunnel
-	DebugNet  bool // for debugging network communication
+	Server              *tunnel.Server
+	ServerStateRecorder *StateRecorder
+	Clients             map[string]*tunnel.Client
+	Listeners           map[string][2]net.Listener // [0] is local listener, [1] is remote one (for TCP tunnels)
+	Addrs               []*net.TCPAddr
+	Tunnels             map[string]*Tunnel
+	DebugNet            bool // for debugging network communication
 
 	mu sync.Mutex // protects Listeners
 }
 
 func NewTunnelTest() (*TunnelTest, error) {
+	rec := NewStateRecorder()
+
 	cfg := &tunnel.ServerConfig{
-		Debug: testing.Verbose(),
+		StateChanges: rec.C(),
+		Debug:        testing.Verbose(),
 	}
 	s, err := tunnel.NewServer(cfg)
 	if err != nil {
@@ -206,12 +209,13 @@ func NewTunnelTest() (*TunnelTest, error) {
 	go (&http.Server{Handler: s}).Serve(l)
 
 	return &TunnelTest{
-		Server:    s,
-		Clients:   make(map[string]*tunnel.Client),
-		Listeners: map[string][2]net.Listener{"": {l, nil}},
-		Addrs:     addrs,
-		Tunnels:   make(map[string]*Tunnel),
-		DebugNet:  debugNet,
+		Server:              s,
+		ServerStateRecorder: rec,
+		Clients:             make(map[string]*tunnel.Client),
+		Listeners:           map[string][2]net.Listener{"": {l, nil}},
+		Addrs:               addrs,
+		Tunnels:             make(map[string]*Tunnel),
+		DebugNet:            debugNet,
 	}, nil
 }
 

@@ -27,6 +27,7 @@ var ErrRedialAborted = errors.New("unable to restore the connection, aborting")
 // ClientState represents client connection state to tunnel server.
 type ClientState uint32
 
+// ClientState enumeration.
 const (
 	ClientUnknown ClientState = iota
 	ClientStarted
@@ -38,17 +39,18 @@ const (
 
 // ClientStateChange represents single client state transition.
 type ClientStateChange struct {
-	Previous ClientState
-	Current  ClientState
-	Error    error
+	Identifier string
+	Previous   ClientState
+	Current    ClientState
+	Error      error
 }
 
 // Strings implements the fmt.Stringer interface.
 func (cs *ClientStateChange) String() string {
 	if cs.Error != nil {
-		return fmt.Sprintf("%s->%s (%s)", cs.Previous, cs.Current, cs.Error)
+		return fmt.Sprintf("[%s] %s->%s (%s)", cs.Identifier, cs.Previous, cs.Current, cs.Error)
 	}
-	return fmt.Sprintf("%s->%s", cs.Previous, cs.Current)
+	return fmt.Sprintf("[%s] %s->%s", cs.Identifier, cs.Previous, cs.Current)
 }
 
 // Backoff defines behavior of staggering reconnection retries.
@@ -383,14 +385,16 @@ func (c *Client) changeState(state ClientState, err error) (prev ClientState) {
 
 	if c.config.StateChanges != nil {
 		change := &ClientStateChange{
-			Previous: ClientState(prev),
-			Current:  state,
-			Error:    err,
+			Identifier: c.config.Identifier,
+			Previous:   ClientState(prev),
+			Current:    state,
+			Error:      err,
 		}
 
 		select {
 		case c.config.StateChanges <- change:
 		default:
+			c.log.Warning("Dropping state change due to slow reader: %s", change)
 		}
 	}
 
@@ -484,7 +488,7 @@ func (c *Client) connect(identifier, serverAddr string) error {
 	}
 
 	ct := newControl(stream)
-	c.log.Debug("client has started successfully.")
+	c.log.Debug("client has started successfully")
 	c.redialBackoff.Reset() // we successfully connected, so we can reset the backoff
 
 	c.startNotifyIfNeeded()
