@@ -298,17 +298,29 @@ func (c *Client) Start() {
 
 // Close closes the client and shutdowns the connection to the tunnel server
 func (c *Client) Close() error {
-	c.setClosed(true)
+	defer c.setClosed(true)
 
 	if c.session == nil {
 		return errors.New("session is not initialized")
 	}
 
-	if err := c.session.GoAway(); err != nil {
-		return err
+	// wait until all connections are finished
+	waitCh := make(chan struct{})
+	go func() {
+		if err := c.session.GoAway(); err != nil {
+			c.log.Debug("Session go away failed: %s", err)
+		}
+
+		c.reqWg.Wait()
+		close(waitCh)
+	}()
+	select {
+	case <-waitCh:
+		// ok
+	case <-time.After(time.Second * 10):
+		c.log.Info("Timeout waiting for connections to finish")
 	}
 
-	c.reqWg.Wait() // wait until all connections are finished
 	if err := c.session.Close(); err != nil {
 		return err
 	}
