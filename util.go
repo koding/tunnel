@@ -103,7 +103,7 @@ func (c *callbacks) call(ident string) error {
 }
 
 // Returns server control url as a string. Reads scheme and remote address from connection.
-func controlUrl(conn net.Conn) (string) {
+func controlUrl(conn net.Conn) string {
 	return fmt.Sprint(scheme(conn), "://", conn.RemoteAddr(), controlPath)
 }
 

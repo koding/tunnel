@@ -177,7 +177,6 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) error {
 		}
 	}
 
-
 	if isWebsocketConn(r) {
 		s.log.Debug("handling websocket connection")
 
@@ -395,7 +394,7 @@ func (s *Server) controlHandler(w http.ResponseWriter, r *http.Request) (ctErr e
 		return fmt.Errorf("hijack not possible: %s", err)
 	}
 
-	if _, err := io.WriteString(conn, "HTTP/1.1 " + connected + "\n\n"); err != nil {
+	if _, err := io.WriteString(conn, "HTTP/1.1 "+connected+"\n\n"); err != nil {
 		return fmt.Errorf("error writing response: %s", err)
 	}
 

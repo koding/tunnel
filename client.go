@@ -80,12 +80,12 @@ type Client struct {
 	// connected to the server. The preferred way of doing this however,
 	// would be using StateChanges in ClientConfig where user can provide
 	// his own channel.
-	startNotify   chan bool
+	startNotify chan bool
 	// closed is a flag set when client calls Close() and quits.
-	closed        bool
+	closed bool
 	// closedMu guards both closed flag and startNotify channel. Since library
 	// owns the channel it's cleared when trying to reconnect.
-	closedMu      sync.RWMutex
+	closedMu sync.RWMutex
 
 	reqWg  sync.WaitGroup
 	ctrlWg sync.WaitGroup
@@ -330,7 +330,8 @@ func (c *Client) Close() error {
 
 // isClosed securely checks if client is marked as closed.
 func (c *Client) isClosed() bool {
-	c.closedMu.RLock(); defer c.closedMu.RUnlock()
+	c.closedMu.RLock()
+	defer c.closedMu.RUnlock()
 	return c.closed
 }
 
@@ -339,7 +340,8 @@ func (c *Client) isClosed() bool {
 // so it doesn't block during connect, when the client was closed and started again,
 // and startNotify was never listened to.
 func (c *Client) setClosed(closed bool) {
-	c.closedMu.Lock(); defer c.closedMu.Unlock()
+	c.closedMu.Lock()
+	defer c.closedMu.Unlock()
 	c.closed = closed
 
 	if !closed {
@@ -360,10 +362,10 @@ func (c *Client) startNotifyIfNeeded() {
 		select {
 		case c.startNotify <- true:
 		default:
-		// reaching here means the client never read the signal via
-		// StartNotify(). This is OK, we shouldn't except it the consumer
-		// to read from this channel. It's optional, so we just drop the
-		// signal.
+			// reaching here means the client never read the signal via
+			// StartNotify(). This is OK, we shouldn't except it the consumer
+			// to read from this channel. It's optional, so we just drop the
+			// signal.
 			c.log.Debug("startNotify message was dropped")
 		}
 	}
