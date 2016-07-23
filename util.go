@@ -65,32 +65,32 @@ func newCallbacks(name string) *callbacks {
 	}
 }
 
-func (c *callbacks) add(ident string, fn func() error) {
+func (c *callbacks) add(identifier string, fn func() error) {
 	c.mu.Lock()
-	c.funcs[ident] = fn
+	c.funcs[identifier] = fn
 	c.mu.Unlock()
 }
 
-func (c *callbacks) pop(ident string) (func() error, error) {
+func (c *callbacks) pop(identifier string) (func() error, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	fn, ok := c.funcs[ident]
+	fn, ok := c.funcs[identifier]
 	if !ok {
 		return nil, nil // nop
 	}
 
-	delete(c.funcs, ident)
+	delete(c.funcs, identifier)
 
 	if fn == nil {
-		return nil, fmt.Errorf("%s: nil callback set for %q client", ident)
+		return nil, fmt.Errorf("nil callback set for %q client", identifier)
 	}
 
 	return fn, nil
 }
 
-func (c *callbacks) call(ident string) error {
-	fn, err := c.pop(ident)
+func (c *callbacks) call(identifier string) error {
+	fn, err := c.pop(identifier)
 	if err != nil {
 		return err
 	}

@@ -169,7 +169,7 @@ func (vaddr *vaddrStorage) getIdent(conn net.Conn) (string, bool) {
 func mustPort(l net.Listener) int {
 	_, port, err := parseHostPort(l.Addr().String())
 	if err != nil {
-		// This can happend when user passed custom type that
+		// This can happened when user passed custom type that
 		// implements net.Listener, which returns ill-formed
 		// net.Addr value.
 		panic("ill-formed net.Addr: " + err.Error())

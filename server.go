@@ -613,9 +613,7 @@ func copyHeader(dst, src http.Header) {
 func (s *Server) checkConnect(fn func(w http.ResponseWriter, r *http.Request) error) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "CONNECT" {
-			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			io.WriteString(w, "405 must CONNECT\n")
+			http.Error(w, "405 must CONNECT\n", http.StatusMethodNotAllowed)
 			return
 		}
 
