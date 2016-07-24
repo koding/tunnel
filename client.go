@@ -225,7 +225,7 @@ func NewClient(cfg *ClientConfig) (*Client, error) {
 // client.FetchIdentifier() will be used if it's not nil. It's supports
 // reconnecting with exponential backoff intervals when the connection to the
 // server disconnects. Call client.Close() to shutdown the client completely. A
-// successfull connection will cause StartNotify() to receive a value.
+// successful connection will cause StartNotify() to receive a value.
 func (c *Client) Start() {
 	fetchIdent := func() (string, error) {
 		if c.config.FetchIdentifier != nil {
