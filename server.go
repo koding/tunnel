@@ -400,7 +400,9 @@ func (s *Server) controlHandler(w http.ResponseWriter, r *http.Request) (ctErr e
 		return fmt.Errorf("error writing response: %s", err)
 	}
 
-	conn.SetDeadline(time.Time{})
+	if err := conn.SetDeadline(time.Time{}); err != nil {
+		return fmt.Errorf("error setting connection deadline: %s", err)
+	}
 
 	s.log.Debug("Creating control session")
 	session, err := yamux.Server(conn, s.yamuxConfig)
