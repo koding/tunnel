@@ -9,7 +9,6 @@ import (
 	"io/ioutil"
 	"net"
 	"net/http"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -131,6 +130,8 @@ type ClientConfig struct {
 	//
 	// If IP-based routing is used this field may be nil, in that case
 	// "127.0.0.1:port" will be used instead.
+	//
+	// It can be used for http tunneling provided that LocalAddr is "".
 	FetchLocalAddr func(port int) (string, error)
 
 	// Debug enables debug mode, enable only if you want to debug the server.
@@ -590,9 +591,14 @@ func (c *Client) proxyHTTP(port int) error {
 	if port == 0 {
 		port = 80
 	}
-	localAddr := "127.0.0.1:" + strconv.Itoa(port)
+	localAddr := fmt.Sprintf("127.0.0.1:%d", port)
 	if c.config.LocalAddr != "" {
 		localAddr = c.config.LocalAddr
+	} else if c.config.FetchLocalAddr != nil {
+		localAddr, err = c.config.FetchLocalAddr(port)
+		if err != nil {
+			return fmt.Errorf("failed to fetch LocalAddr for port %d: %s", port, err)
+		}
 	}
 
 	c.log.Debug("Dialing local server: %s", localAddr)
