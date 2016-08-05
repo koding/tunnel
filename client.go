@@ -14,8 +14,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/hashicorp/yamux"
 	"github.com/koding/logging"
+	"github.com/koding/tunnel/proto"
+
+	"github.com/hashicorp/yamux"
 )
 
 //go:generate stringer -type ClientState
@@ -422,7 +424,7 @@ func (c *Client) connect(identifier, serverAddr string) error {
 		return fmt.Errorf("error creating request to %s: %s", remoteUrl, err)
 	}
 
-	req.Header.Set(xKTunnelIdentifier, identifier)
+	req.Header.Set(proto.ClientIdentifierHeader, identifier)
 
 	c.log.Debug("Writing request to TCP: %+v", req)
 
@@ -438,7 +440,7 @@ func (c *Client) connect(identifier, serverAddr string) error {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != 200 && resp.Status != connected {
+	if resp.StatusCode != http.StatusOK || resp.Status != proto.Connected {
 		out, err := ioutil.ReadAll(resp.Body)
 		if err != nil {
 			return fmt.Errorf("tunnel server error: status=%d, error=%s", resp.StatusCode, err)
@@ -474,16 +476,16 @@ func (c *Client) connect(identifier, serverAddr string) error {
 		return errors.New("timeout opening session")
 	}
 
-	if _, err := stream.Write([]byte(ctHandshakeRequest)); err != nil {
+	if _, err := stream.Write([]byte(proto.HandshakeRequest)); err != nil {
 		return fmt.Errorf("writing handshake request failed: %s", err)
 	}
 
-	buf := make([]byte, len(ctHandshakeResponse))
+	buf := make([]byte, len(proto.HandshakeResponse))
 	if _, err := stream.Read(buf); err != nil {
 		return fmt.Errorf("reading handshake response failed: %s", err)
 	}
 
-	if string(buf) != ctHandshakeResponse {
+	if string(buf) != proto.HandshakeResponse {
 		return fmt.Errorf("invalid handshake response, received: %s", string(buf))
 	}
 
@@ -510,10 +512,9 @@ func (c *Client) listenControl(ct *control) error {
 
 	c.changeState(ClientConnected, nil)
 
+	var msg proto.ControlMessage
 	for {
-		var msg controlMsg
-		err := ct.dec.Decode(&msg)
-		if err != nil {
+		if err := ct.dec.Decode(&msg); err != nil {
 			c.reqWg.Wait() // wait until all requests are finished
 			c.session.GoAway()
 			c.session.Close()
@@ -525,9 +526,9 @@ func (c *Client) listenControl(ct *control) error {
 		c.log.Debug("Received control msg %+v", msg)
 
 		switch msg.Action {
-		case requestClientSession:
+		case proto.RequestClientSession:
 			switch msg.Protocol {
-			case tcpTransport:
+			case proto.TCP:
 				c.log.Debug("Received request to open a TCP session to server")
 
 				go func() {
@@ -536,7 +537,7 @@ func (c *Client) listenControl(ct *control) error {
 					}
 				}()
 
-			case wsTransport, httpTransport:
+			case proto.HTTP, proto.WS:
 				c.log.Debug("Received request to open a HTTP session to server")
 
 				go func() {
