@@ -1,4 +1,4 @@
-// TODO mma docs
+// Package proto defines tunnel client server communication protocol.
 
 package proto
 
