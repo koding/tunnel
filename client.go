@@ -536,8 +536,8 @@ func (c *Client) listenControl(ct *control) error {
 
 	c.changeState(ClientConnected, nil)
 
-	var msg proto.ControlMessage
 	for {
+		var msg proto.ControlMessage
 		if err := ct.dec.Decode(&msg); err != nil {
 			c.reqWg.Wait() // wait until all requests are finished
 			c.session.GoAway()
