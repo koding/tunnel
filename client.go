@@ -160,6 +160,14 @@ type ClientConfig struct {
 
 	// Debug enables debug mode, enable only if you want to debug the server.
 	Debug bool
+
+	// DEPRECATED:
+
+	// LocalAddr is DEPRECATED please use ProxyHTTP.LocalAddr, see ProxyOverwrite for more details.
+	LocalAddr string
+
+	// FetchLocalAddr is DEPRECATED please use ProxyTCP.FetchLocalAddr, see ProxyOverwrite for more details.
+	FetchLocalAddr func(port int) (string, error)
 }
 
 // verify is used to verify the ClientConfig
@@ -176,6 +184,10 @@ func (c *ClientConfig) verify() error {
 		if err := yamux.VerifyConfig(c.YamuxConfig); err != nil {
 			return err
 		}
+	}
+
+	if c.Proxy != nil && (c.LocalAddr != "" || c.FetchLocalAddr != nil) {
+		return errors.New("both Proxy and LocalAddr or FetchLocalAddr are set")
 	}
 
 	return nil
@@ -198,6 +210,21 @@ func NewClient(cfg *ClientConfig) (*Client, error) {
 	var proxy Proxy = &ProxyOverwrite{}
 	if cfg.Proxy != nil {
 		proxy = cfg.Proxy
+	} else {
+		// handle deprecated LocalAddr and FetchLocalAddr
+		if cfg.LocalAddr != "" {
+			proxy.(*ProxyOverwrite).HTTP = &ProxyHTTP{
+				LocalAddr: cfg.LocalAddr,
+			}
+			proxy.(*ProxyOverwrite).WS = &ProxyHTTP{
+				LocalAddr: cfg.LocalAddr,
+			}
+		}
+		if cfg.FetchLocalAddr != nil {
+			proxy.(*ProxyOverwrite).TCP = &ProxyTCP{
+				FetchLocalAddr: cfg.FetchLocalAddr,
+			}
+		}
 	}
 
 	var bo Backoff = newForeverBackoff()
