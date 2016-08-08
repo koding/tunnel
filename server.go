@@ -342,7 +342,7 @@ func (s *Server) proxy(wg *sync.WaitGroup, dst, src net.Conn) {
 	s.log.Debug("tunneled %d bytes %s -> %s: %v", n, src.RemoteAddr(), dst.RemoteAddr(), err)
 }
 
-func (s *Server) dial(identifier string, p proto.TransportProtocol, port int) (net.Conn, error) {
+func (s *Server) dial(identifier string, p proto.Type, port int) (net.Conn, error) {
 	control, ok := s.getControl(identifier)
 	if !ok {
 		return nil, errNoClientSession

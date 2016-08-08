@@ -13,17 +13,70 @@ import (
 	"github.com/koding/tunnel/proto"
 )
 
-// Proxy is responsible for forwarding remote connection to local server and writing the response back.
-type Proxy interface {
-	Proxy(remote net.Conn, msg *proto.ControlMessage)
+// ProxyFunc is responsible for forwarding a remote connection to local server and writing the response back.
+type ProxyFunc func(remote net.Conn, msg *proto.ControlMessage)
+
+var (
+	// DefaultProxyFuncs holds global default proxy functions for all transport protocols.
+	DefaultProxyFuncs = ProxyFuncs{
+		HTTP: new(HTTPProxy).Proxy,
+		TCP:  new(TCPProxy).Proxy,
+		WS:   new(HTTPProxy).Proxy,
+	}
+	// DefaultProxy is a ProxyFunc that uses DefaultProxyFuncs.
+	DefaultProxy = Proxy(ProxyFuncs{})
+)
+
+// ProxyFuncs is a collection of ProxyFunc.
+type ProxyFuncs struct {
+	// HTTP is custom implementation of HTTP proxing.
+	HTTP ProxyFunc
+	// TCP is custom implementation of TCP proxing.
+	TCP ProxyFunc
+	// WS is custom implementation of web socket proxing.
+	WS ProxyFunc
 }
+
+// Proxy returns a ProxyFunc that uses custom function if provided, otherwise falls back to DefaultProxyFuncs.
+func Proxy(p ProxyFuncs) ProxyFunc {
+	return func(remote net.Conn, msg *proto.ControlMessage) {
+		var f ProxyFunc
+		switch msg.Protocol {
+		case proto.HTTP:
+			f = DefaultProxyFuncs.HTTP
+			if p.HTTP != nil {
+				f = p.HTTP
+			}
+		case proto.TCP:
+			f = DefaultProxyFuncs.TCP
+			if p.TCP != nil {
+				f = p.TCP
+			}
+		case proto.WS:
+			f = DefaultProxyFuncs.WS
+			if p.WS != nil {
+				f = p.WS
+			}
+		}
+
+		if f == nil {
+			logging.Error("Could not determine proxy function for %v", msg)
+			remote.Close()
+		}
+
+		f(remote, msg)
+	}
+}
+
+////////////////
+// HTTP proxy //
+////////////////
 
 var (
 	httpLog = logging.NewLogger("http")
-	tpcLog  = logging.NewLogger("tcp")
 )
 
-// ProxyHTTP is Proxy implementation focused on forwarding HTTP traffic.
+// HTTPProxy forwards HTTP traffic.
 //
 // When tunnel server requests a connection it's proxied to 127.0.0.1:incomingPort
 // where incomingPort is control message LocalPort.
@@ -32,7 +85,7 @@ var (
 // FetchLocalAddr takes precedence over LocalAddr.
 //
 // When connection to local server cannot be established proxy responds with http error message.
-type ProxyHTTP struct {
+type HTTPProxy struct {
 	// LocalAddr defines the TCP address of the local server.
 	// This is optional if you want to specify a single TCP address.
 	LocalAddr string
@@ -48,8 +101,8 @@ type ProxyHTTP struct {
 	Log logging.Logger
 }
 
-// Proxy proxies remote connection to local server.
-func (p *ProxyHTTP) Proxy(remote net.Conn, msg *proto.ControlMessage) {
+// Proxy is a ProxyFunc.
+func (p *HTTPProxy) Proxy(remote net.Conn, msg *proto.ControlMessage) {
 	if msg.Protocol != proto.HTTP && msg.Protocol != proto.WS {
 		panic("Proxy mismatch")
 	}
@@ -85,7 +138,7 @@ func (p *ProxyHTTP) Proxy(remote net.Conn, msg *proto.ControlMessage) {
 	Join(local, remote, log)
 }
 
-func (p *ProxyHTTP) sendError(remote net.Conn) {
+func (p *HTTPProxy) sendError(remote net.Conn) {
 	var w = noLocalServer()
 	if p.ErrorResp != nil {
 		w = p.ErrorResp
@@ -97,6 +150,8 @@ func (p *ProxyHTTP) sendError(remote net.Conn) {
 		var log = p.log()
 		log.Debug("Copy in-mem response error: %s", err)
 	}
+
+	remote.Close()
 }
 
 func noLocalServer() *http.Response {
@@ -112,14 +167,22 @@ func noLocalServer() *http.Response {
 	}
 }
 
-func (p *ProxyHTTP) log() logging.Logger {
+func (p *HTTPProxy) log() logging.Logger {
 	if p.Log != nil {
 		return p.Log
 	}
 	return httpLog
 }
 
-// ProxyTCP is Proxy implementation for TCP streams.
+///////////////
+// TCP proxy //
+///////////////
+
+var (
+	tpcLog = logging.NewLogger("tcp")
+)
+
+// TCPProxy forwards TCP streams.
 //
 // If port-based routing is used, LocalAddr or FetchLocalAddr field is required
 // for tunneling to function properly.
@@ -130,7 +193,7 @@ func (p *ProxyHTTP) log() logging.Logger {
 // Usually this is tunnel server's public exposed Port.
 // This behaviour can be changed by setting LocalAddr or FetchLocalAddr.
 // FetchLocalAddr takes precedence over LocalAddr.
-type ProxyTCP struct {
+type TCPProxy struct {
 	// LocalAddr defines the TCP address of the local server.
 	// This is optional if you want to specify a single TCP address.
 	LocalAddr string
@@ -142,8 +205,8 @@ type ProxyTCP struct {
 	Log logging.Logger
 }
 
-// Proxy proxies remote connection to local server.
-func (p *ProxyTCP) Proxy(remote net.Conn, msg *proto.ControlMessage) {
+// Proxy is a ProxyFunc.
+func (p *TCPProxy) Proxy(remote net.Conn, msg *proto.ControlMessage) {
 	if msg.Protocol != proto.TCP {
 		panic("Proxy mismatch")
 	}
@@ -177,7 +240,7 @@ func (p *ProxyTCP) Proxy(remote net.Conn, msg *proto.ControlMessage) {
 	Join(local, remote, log)
 }
 
-func (p *ProxyTCP) log() logging.Logger {
+func (p *TCPProxy) log() logging.Logger {
 	if p.Log != nil {
 		return p.Log
 	}
@@ -185,8 +248,8 @@ func (p *ProxyTCP) log() logging.Logger {
 }
 
 // Join copies data between local and remote connections.
-// It reads one connection and writes to the other.
-// It aims to provide a building block for custom Proxy implementations.
+// It reads from one connection and writes to the other.
+// It's a building block for ProxyFunc implementations.
 func Join(local, remote net.Conn, log logging.Logger) {
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -208,8 +271,8 @@ func Join(local, remote net.Conn, log logging.Logger) {
 			if err := d.CloseWrite(); err != nil {
 				log.Debug("%s: closeWrite error: %s", side, err)
 			}
-		}
 
+		}
 		wg.Done()
 		log.Debug("done proxing %s -> %s: %d bytes", src.RemoteAddr(), dst.RemoteAddr(), n)
 	}
@@ -218,75 +281,4 @@ func Join(local, remote net.Conn, log logging.Logger) {
 	go transfer("local to remote", remote, local)
 
 	wg.Wait()
-}
-
-////////////////////
-// ProxyOverwrite //
-////////////////////
-
-// ProxyOverwrite enables easy setting of different proxy functions for different
-// transport protocols. Consider the following example:
-//
-//     tunnel.ProxyOverwrite{
-//             HTTP: &tunnel.ProxyHTTP{
-//                     LocalAddr: localAddr,
-//             },
-//             WS: &MyCustomWSProxy{},
-//     }
-//
-// This code would result in a Proxy implementation that:
-//
-// * forwards all HTTP calls to localAddr
-// * uses MyCustomWSProxy for web sockets
-// * handles TCP using default implementation
-type ProxyOverwrite struct {
-	// HTTP is optional custom implementation of HTTP proxing.
-	HTTP Proxy
-	// TCP is optional custom implementation of TCP proxing.
-	TCP Proxy
-	// WS is optional custom implementation of web socket proxing.
-	WS Proxy
-
-	defaultHTTP ProxyHTTP
-	defaultTCP  ProxyTCP
-}
-
-// Proxy selects appropriate Proxy method based on control message protocol.
-// It proxy method for a given protocol was not ovewritten a default implementation
-// would be used.
-func (p *ProxyOverwrite) Proxy(remote net.Conn, msg *proto.ControlMessage) {
-	switch msg.Protocol {
-	case proto.HTTP:
-		p.http(remote, msg)
-	case proto.TCP:
-		p.tcp(remote, msg)
-	case proto.WS:
-		p.ws(remote, msg)
-	}
-}
-
-func (p *ProxyOverwrite) http(remote net.Conn, msg *proto.ControlMessage) {
-	if p.HTTP != nil {
-		p.HTTP.Proxy(remote, msg)
-		return
-	}
-
-	p.defaultHTTP.Proxy(remote, msg)
-}
-
-func (p *ProxyOverwrite) tcp(remote net.Conn, msg *proto.ControlMessage) {
-	if p.TCP != nil {
-		p.TCP.Proxy(remote, msg)
-		return
-	}
-
-	p.defaultTCP.Proxy(remote, msg)
-}
-
-func (p *ProxyOverwrite) ws(remote net.Conn, msg *proto.ControlMessage) {
-	if p.WS != nil {
-		p.WS.Proxy(remote, msg)
-	}
-
-	p.defaultHTTP.Proxy(remote, msg)
 }

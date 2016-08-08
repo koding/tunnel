@@ -267,18 +267,16 @@ func (tt *TunnelTest) serveSingle(ident string, t *Tunnel) (bool, error) {
 	}
 
 	localAddr := l.Addr().String()
+	httpProxy := &tunnel.HTTPProxy{LocalAddr: localAddr}
+	tcpProxy := &tunnel.TCPProxy{FetchLocalAddr: tt.fetchLocalAddr}
 
 	cfg := &tunnel.ClientConfig{
 		Identifier: ident,
 		ServerAddr: tt.ServerAddr().String(),
-		Proxy: &tunnel.ProxyOverwrite{
-			HTTP: &tunnel.ProxyHTTP{
-				LocalAddr: localAddr,
-			},
-			TCP: &tunnel.ProxyTCP{
-				FetchLocalAddr: tt.fetchLocalAddr,
-			},
-		},
+		Proxy: tunnel.Proxy(tunnel.ProxyFuncs{
+			HTTP: httpProxy.Proxy,
+			TCP:  tcpProxy.Proxy,
+		}),
 		StateChanges: t.StateChanges,
 		Debug:        testing.Verbose(),
 	}

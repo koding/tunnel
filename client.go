@@ -77,7 +77,7 @@ type Client struct {
 	yamuxConfig *yamux.Config
 
 	// proxy handles local server communication.
-	proxy Proxy
+	proxy ProxyFunc
 
 	// startNotify is a chanel user can get to be notified when client is
 	// connected to the server. The preferred way of doing this however,
@@ -129,9 +129,7 @@ type ClientConfig struct {
 
 	// Proxy defines custom proxing logic. This is optional extension point
 	// where you can provide your local server selection or communication rules.
-	//
-	// For most cases ProxyOverwrite would be a good starting point.
-	Proxy Proxy
+	Proxy ProxyFunc
 
 	// StateChanges receives state transition details each time client
 	// connection state changes. The channel is expected to be sufficiently
@@ -207,24 +205,21 @@ func NewClient(cfg *ClientConfig) (*Client, error) {
 		yamuxConfig = cfg.YamuxConfig
 	}
 
-	var proxy Proxy = &ProxyOverwrite{}
+	var proxy = DefaultProxy
 	if cfg.Proxy != nil {
 		proxy = cfg.Proxy
-	} else {
-		// handle deprecated LocalAddr and FetchLocalAddr
+	}
+	// DEPRECATED API SUPPORT
+	if cfg.LocalAddr != "" || cfg.FetchLocalAddr != nil {
+		var f ProxyFuncs
 		if cfg.LocalAddr != "" {
-			proxy.(*ProxyOverwrite).HTTP = &ProxyHTTP{
-				LocalAddr: cfg.LocalAddr,
-			}
-			proxy.(*ProxyOverwrite).WS = &ProxyHTTP{
-				LocalAddr: cfg.LocalAddr,
-			}
+			f.HTTP = (&HTTPProxy{LocalAddr: cfg.LocalAddr}).Proxy
+			f.WS = (&HTTPProxy{LocalAddr: cfg.LocalAddr}).Proxy
 		}
 		if cfg.FetchLocalAddr != nil {
-			proxy.(*ProxyOverwrite).TCP = &ProxyTCP{
-				FetchLocalAddr: cfg.FetchLocalAddr,
-			}
+			f.TCP = (&TCPProxy{FetchLocalAddr: cfg.FetchLocalAddr}).Proxy
 		}
+		proxy = Proxy(f)
 	}
 
 	var bo Backoff = newForeverBackoff()
@@ -560,7 +555,7 @@ func (c *Client) listenControl(ct *control) error {
 			c.reqWg.Add(1)
 		}
 		go func() {
-			c.proxy.Proxy(remote, &msg)
+			c.proxy(remote, &msg)
 			if isHTTP {
 				c.reqWg.Done()
 			}
