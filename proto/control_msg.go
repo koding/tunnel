@@ -10,6 +10,7 @@ type ControlMessage struct {
 // Action represents type of ControlMsg request.
 type Action int
 
+// ControlMessage actions.
 const (
 	RequestClientSession Action = iota + 1
 )
@@ -17,6 +18,7 @@ const (
 // Type represents tunneled connection type.
 type Type int
 
+// ControlMessage protocols.
 const (
 	HTTP Type = iota + 1
 	TCP
