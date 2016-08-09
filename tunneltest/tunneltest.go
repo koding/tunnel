@@ -266,13 +266,19 @@ func (tt *TunnelTest) serveSingle(ident string, t *Tunnel) (bool, error) {
 		l = dbgListener{l}
 	}
 
+	localAddr := l.Addr().String()
+	httpProxy := &tunnel.HTTPProxy{LocalAddr: localAddr}
+	tcpProxy := &tunnel.TCPProxy{FetchLocalAddr: tt.fetchLocalAddr}
+
 	cfg := &tunnel.ClientConfig{
-		Identifier:     ident,
-		ServerAddr:     tt.ServerAddr().String(),
-		LocalAddr:      l.Addr().String(),
-		FetchLocalAddr: tt.fetchLocalAddr,
-		Debug:          testing.Verbose(),
-		StateChanges:   t.StateChanges,
+		Identifier: ident,
+		ServerAddr: tt.ServerAddr().String(),
+		Proxy: tunnel.Proxy(tunnel.ProxyFuncs{
+			HTTP: httpProxy.Proxy,
+			TCP:  tcpProxy.Proxy,
+		}),
+		StateChanges: t.StateChanges,
+		Debug:        testing.Verbose(),
 	}
 
 	// Register tunnel:
@@ -303,7 +309,7 @@ func (tt *TunnelTest) serveSingle(ident string, t *Tunnel) (bool, error) {
 
 		go (&http.Server{Handler: h}).Serve(l)
 
-		tt.Server.AddHost(cfg.LocalAddr, ident)
+		tt.Server.AddHost(localAddr, ident)
 
 		tt.mu.Lock()
 		tt.Listeners[ident] = [2]net.Listener{l, nil}
@@ -313,7 +319,7 @@ func (tt *TunnelTest) serveSingle(ident string, t *Tunnel) (bool, error) {
 			return false, fmt.Errorf("error creating client for %q tunnel: %s", ident, err)
 		}
 
-		logf("registered HTTP tunnel: host=%s, ident=%s", cfg.LocalAddr, ident)
+		logf("registered HTTP tunnel: host=%s, ident=%s", localAddr, ident)
 
 	case TypeTCP:
 		// TODO(rjeczalik): refactor to separate method

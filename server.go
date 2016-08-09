@@ -17,8 +17,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hashicorp/yamux"
 	"github.com/koding/logging"
+	"github.com/koding/tunnel/proto"
+
+	"github.com/hashicorp/yamux"
 )
 
 var (
@@ -152,7 +154,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// if the user didn't add the control and tunnel handler manually, we'll
 	// going to infer and call the respective path handlers.
 	switch path.Clean(r.URL.Path) + "/" {
-	case controlPath:
+	case proto.ControlPath:
 		s.checkConnect(s.controlHandler).ServeHTTP(w, r)
 		return
 	}
@@ -161,7 +163,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if !strings.Contains(err.Error(), "no virtual host available") { // this one is outputted too much, unnecessarily
 			s.log.Error("remote %s (%s): %s", r.RemoteAddr, r.RequestURI, err)
 		}
-		http.Error(w, err.Error(), 502)
+		http.Error(w, err.Error(), http.StatusBadGateway)
 	}
 }
 
@@ -205,7 +207,7 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) error {
 		return s.handleWSConn(w, r, identifier, port)
 	}
 
-	stream, err := s.dial(identifier, httpTransport, port)
+	stream, err := s.dial(identifier, proto.HTTP, port)
 	if err != nil {
 		return err
 	}
@@ -273,7 +275,7 @@ func (s *Server) handleWSConn(w http.ResponseWriter, r *http.Request, ident stri
 		return fmt.Errorf("hijack not possible: %s", err)
 	}
 
-	stream, err := s.dial(ident, wsTransport, port)
+	stream, err := s.dial(ident, proto.WS, port)
 	if err != nil {
 		return err
 	}
@@ -316,7 +318,7 @@ func (s *Server) handleTCPConn(conn net.Conn) error {
 		return err
 	}
 
-	stream, err := s.dial(ident, tcpTransport, port)
+	stream, err := s.dial(ident, proto.TCP, port)
 	if err != nil {
 		return err
 	}
@@ -340,20 +342,20 @@ func (s *Server) proxy(wg *sync.WaitGroup, dst, src net.Conn) {
 	s.log.Debug("tunneled %d bytes %s -> %s: %v", n, src.RemoteAddr(), dst.RemoteAddr(), err)
 }
 
-func (s *Server) dial(ident string, proto transportProtocol, port int) (net.Conn, error) {
-	control, ok := s.getControl(ident)
+func (s *Server) dial(identifier string, p proto.Type, port int) (net.Conn, error) {
+	control, ok := s.getControl(identifier)
 	if !ok {
 		return nil, errNoClientSession
 	}
 
-	session, err := s.getSession(ident)
+	session, err := s.getSession(identifier)
 	if err != nil {
 		return nil, err
 	}
 
-	msg := controlMsg{
-		Action:    requestClientSession,
-		Protocol:  proto,
+	msg := proto.ControlMessage{
+		Action:    proto.RequestClientSession,
+		Protocol:  p,
 		LocalPort: port,
 	}
 
@@ -366,7 +368,7 @@ func (s *Server) dial(ident string, proto transportProtocol, port int) (net.Conn
 		// be broken. In all cases, it's not reliable anymore having a client
 		// session.
 		control.Close()
-		s.deleteControl(ident)
+		s.deleteControl(identifier)
 		return nil, errNoClientSession
 	}
 
@@ -390,7 +392,7 @@ func (s *Server) dial(ident string, proto transportProtocol, port int) (net.Conn
 // controlHandler is used to capture incoming tunnel connect requests into raw
 // tunnel TCP connections.
 func (s *Server) controlHandler(w http.ResponseWriter, r *http.Request) (ctErr error) {
-	identifier := r.Header.Get(xKTunnelIdentifier)
+	identifier := r.Header.Get(proto.ClientIdentifierHeader)
 	_, ok := s.getHost(identifier)
 	if !ok {
 		return fmt.Errorf("no host associated for identifier %s. please use server.AddHost()", identifier)
@@ -417,7 +419,7 @@ func (s *Server) controlHandler(w http.ResponseWriter, r *http.Request) (ctErr e
 		return fmt.Errorf("hijack not possible: %s", err)
 	}
 
-	if _, err := io.WriteString(conn, "HTTP/1.1 "+connected+"\n\n"); err != nil {
+	if _, err := io.WriteString(conn, "HTTP/1.1 "+proto.Connected+"\n\n"); err != nil {
 		return fmt.Errorf("error writing response: %s", err)
 	}
 
@@ -460,16 +462,16 @@ func (s *Server) controlHandler(w http.ResponseWriter, r *http.Request) (ctErr e
 	}
 
 	s.log.Debug("Initiating handshake protocol")
-	buf := make([]byte, len(ctHandshakeRequest))
+	buf := make([]byte, len(proto.HandshakeRequest))
 	if _, err := stream.Read(buf); err != nil {
 		return err
 	}
 
-	if string(buf) != ctHandshakeRequest {
+	if string(buf) != proto.HandshakeRequest {
 		return fmt.Errorf("handshake aborted. got: %s", string(buf))
 	}
 
-	if _, err := stream.Write([]byte(ctHandshakeResponse)); err != nil {
+	if _, err := stream.Write([]byte(proto.HandshakeResponse)); err != nil {
 		return err
 	}
 
@@ -687,7 +689,7 @@ func (s *Server) checkConnect(fn func(w http.ResponseWriter, r *http.Request) er
 		if err := fn(w, r); err != nil {
 			s.log.Error("Handler err: %v", err.Error())
 
-			if identifier := r.Header.Get(xKTunnelIdentifier); identifier != "" {
+			if identifier := r.Header.Get(proto.ClientIdentifierHeader); identifier != "" {
 				s.onDisconnect(identifier, err)
 			}
 
