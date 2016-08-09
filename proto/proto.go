@@ -1,5 +1,4 @@
 // Package proto defines tunnel client server communication protocol.
-
 package proto
 
 const (
@@ -15,6 +14,6 @@ const (
 	Connected = "200 Connected to Tunnel"
 	// HandshakeRequest is hello message sent by client to server.
 	HandshakeRequest = "controlHandshake"
-	// HandshakeRequest is response to HandshakeRequest sent by server to client.
+	// HandshakeResponse is response to HandshakeRequest sent by server to client.
 	HandshakeResponse = "controlOk"
 )
