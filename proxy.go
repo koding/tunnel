@@ -73,7 +73,7 @@ func Join(local, remote net.Conn, log logging.Logger) {
 
 	transfer := func(side string, dst, src net.Conn) {
 		log.Debug("proxing %s -> %s", src.RemoteAddr(), dst.RemoteAddr())
-
+		defer dst.Close()
 		n, err := io.Copy(dst, src)
 		if err != nil {
 			log.Error("%s: copy error: %s", side, err)
