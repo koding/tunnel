@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path"
 	"strconv"
 	"strings"
 	"sync"
@@ -140,6 +141,20 @@ func NewServer(cfg *ServerConfig) (*Server, error) {
 	go s.serveTCP()
 
 	return s, nil
+}
+
+// ServeHTTP is a tunnel that creates an http/websocket tunnel between a
+// public connection and the client connection.
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// if the user didn't add the control and tunnel handler manually, we'll
+	// going to infer and call the respective path handlers.
+	switch path.Clean(r.URL.Path) + "/" {
+	case proto.ControlPath:
+		s.checkConnect(s.controlHandler).ServeHTTP(w, r)
+		return
+	}
+
+	http.Error(w, "404 not found", http.StatusNotFound)
 }
 
 func (s *Server) serveTCP() {
