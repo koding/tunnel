@@ -546,15 +546,9 @@ func (c *Client) listenControl(ct *control) error {
 			return err
 		}
 
-		isHTTP := msg.Protocol == proto.HTTP
-		if isHTTP {
-			c.reqWg.Add(1)
-		}
 		go func() {
 			c.proxy(remote, &msg)
-			if isHTTP {
-				c.reqWg.Done()
-			}
+			c.log.Debug("Closing server session")
 			remote.Close()
 		}()
 	}
