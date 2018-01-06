@@ -207,20 +207,20 @@ func (s *Server) handleTCPConn(conn net.Conn) error {
 	var wg sync.WaitGroup
 	wg.Add(2)
 
-	go s.proxy(&wg, conn, stream)
-	go s.proxy(&wg, stream, conn)
+	go s.proxy(&wg, conn, stream, "from proxy-client to client")
+	go s.proxy(&wg, stream, conn, "from client to proxy-client")
 
 	wg.Wait()
 
 	return nonil(stream.Close(), conn.Close())
 }
 
-func (s *Server) proxy(wg *sync.WaitGroup, dst, src net.Conn) {
+func (s *Server) proxy(wg *sync.WaitGroup, dst, src net.Conn, side string) {
 	defer wg.Done()
 
-	s.log.Debug("tunneling %s -> %s", src.RemoteAddr(), dst.RemoteAddr())
+	s.log.Debug("tunneling %s -> %s (%s)", src.RemoteAddr(), dst.RemoteAddr(), side)
 	n, err := io.Copy(dst, src)
-	s.log.Debug("tunneled %d bytes %s -> %s: %v", n, src.RemoteAddr(), dst.RemoteAddr(), err)
+	s.log.Debug("tunneled %d bytes %s -> %s (%s): %v", n, src.RemoteAddr(), dst.RemoteAddr(), side, err)
 }
 
 func (s *Server) dial(identifier string, p proto.Type, port int) (net.Conn, error) {
