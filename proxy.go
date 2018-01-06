@@ -3,6 +3,7 @@ package tunnel
 import (
 	"io"
 	"net"
+	"strings"
 	"sync"
 
 	"github.com/koding/logging"
@@ -56,7 +57,10 @@ func Join(local, remote net.Conn, log logging.Logger) {
 		log.Debug("proxing %s -> %s", src.RemoteAddr(), dst.RemoteAddr())
 
 		n, err := io.Copy(dst, src)
-		if err != nil {
+		// either the backend server being proxied,
+		// or the client talking to the backend server through the proxy may close the connection at any time.
+		// This is fine, and in that case we simply completely close and clean up this connection.
+		if err != nil && !strings.Contains(err.Error(), "use of closed") {
 			log.Error("%s: copy error: %s", side, err)
 		}
 
@@ -64,13 +68,10 @@ func Join(local, remote net.Conn, log logging.Logger) {
 			log.Debug("%s: close error: %s", side, err)
 		}
 
-		// not for yamux streams, but for client to local server connections
-		if d, ok := dst.(*net.TCPConn); ok {
-			if err := d.CloseWrite(); err != nil {
-				log.Debug("%s: closeWrite error: %s", side, err)
-			}
-
+		if err := dst.Close(); err != nil {
+			log.Debug("%s: closeWrite error: %s", side, err)
 		}
+
 		wg.Done()
 		log.Debug("done proxing %s -> %s: %d bytes", src.RemoteAddr(), dst.RemoteAddr(), n)
 	}

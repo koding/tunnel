@@ -204,19 +204,19 @@ func (s *Server) handleTCPConn(conn net.Conn) error {
 		stream.Write([]byte(fmt.Sprintf("PROXY %s %s %s %s %s\r\n", proxyNetwork, remoteHost, localHost, remotePort, localPort)))
 	}
 
-	var wg sync.WaitGroup
-	wg.Add(2)
+	disconnectedChan := make(chan bool)
 
-	go s.proxy(&wg, conn, stream, "from proxy-client to client")
-	go s.proxy(&wg, stream, conn, "from client to proxy-client")
+	go s.proxy(disconnectedChan, conn, stream, "from proxy-client to client")
+	go s.proxy(disconnectedChan, stream, conn, "from client to proxy-client")
 
-	wg.Wait()
+	// Once one member of this conversation has disconnected, we should end the conversation for all parties.
+	<-disconnectedChan
 
 	return nonil(stream.Close(), conn.Close())
 }
 
-func (s *Server) proxy(wg *sync.WaitGroup, dst, src net.Conn, side string) {
-	defer wg.Done()
+func (s *Server) proxy(disconnectedChan chan bool, dst, src net.Conn, side string) {
+	defer (func() { disconnectedChan <- true })()
 
 	s.log.Debug("tunneling %s -> %s (%s)", src.RemoteAddr(), dst.RemoteAddr(), side)
 	n, err := io.Copy(dst, src)
