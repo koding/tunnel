@@ -70,6 +70,8 @@ type Server struct {
 	// yamuxConfig is passed to new yamux.Session's
 	yamuxConfig *yamux.Config
 
+	sendProxyProtocolv1 bool
+
 	log logging.Logger
 }
 
@@ -85,6 +87,9 @@ type ServerConfig struct {
 
 	// Debug enables debug mode, enable only if you want to debug the server
 	Debug bool
+
+	//Send the HAProxy PROXY protocol v1 header to the proxy client before streaming TCP from the remote client.
+	SendProxyProtocolv1 bool
 
 	// Log defines the logger. If nil a default logging.Logger is used.
 	Log logging.Logger
@@ -129,6 +134,7 @@ func NewServer(cfg *ServerConfig) (*Server, error) {
 		yamuxConfig:           yamuxConfig,
 		connCh:                connCh,
 		log:                   log,
+		sendProxyProtocolv1:   cfg.SendProxyProtocolv1,
 	}
 
 	go s.serveTCP()
@@ -164,6 +170,23 @@ func (s *Server) handleTCPConn(conn net.Conn) error {
 	stream, err := s.dial(ident, proto.TCP, port)
 	if err != nil {
 		return err
+	}
+
+	if s.sendProxyProtocolv1 {
+		remoteHost, remotePort, err := net.SplitHostPort(conn.RemoteAddr().String())
+		if err != nil {
+			return err
+		}
+		localHost, localPort, err := net.SplitHostPort(conn.LocalAddr().String())
+		if err != nil {
+			return err
+		}
+		proxyNetwork := "TCP4"
+		if strings.Contains(localHost, ":") {
+			proxyNetwork = "TCP6"
+		}
+
+		stream.Write([]byte(fmt.Sprintf("PROXY %s %s %s %s %s\r\n", proxyNetwork, remoteHost, localHost, remotePort, localPort)))
 	}
 
 	var wg sync.WaitGroup
