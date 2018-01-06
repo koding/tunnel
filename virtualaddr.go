@@ -146,6 +146,20 @@ func (vaddr *vaddrStorage) newListener(l net.Listener) *listener {
 	}
 }
 
+func (vaddr *vaddrStorage) HasIdentifier(identifier string) bool {
+	for _, id := range vaddr.ports {
+		if id == identifier {
+			return true
+		}
+	}
+	for _, id := range vaddr.ips {
+		if id == identifier {
+			return true
+		}
+	}
+	return false
+}
+
 func (vaddr *vaddrStorage) getIdent(conn net.Conn) (string, bool) {
 	vaddr.mu.Lock()
 	defer vaddr.mu.Unlock()

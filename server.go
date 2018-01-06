@@ -4,14 +4,12 @@
 package tunnel
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"os"
-	"path"
 	"strconv"
 	"strings"
 	"sync"
@@ -46,7 +44,7 @@ type Server struct {
 	controls *controls
 
 	// virtualHosts is used to map public hosts to remote clients.
-	virtualHosts vhostStorage
+	//virtualHosts vhostStorage
 
 	// virtualAddrs.
 	virtualAddrs *vaddrStorage
@@ -69,10 +67,6 @@ type Server struct {
 	// stateCh notifies receiver about client state changes.
 	stateCh chan<- *ClientStateChange
 
-	// httpDirector is provided by ServerConfig, if not nil decorates http requests
-	// before forwarding them to client.
-	httpDirector func(*http.Request)
-
 	// yamuxConfig is passed to new yamux.Session's
 	yamuxConfig *yamux.Config
 
@@ -88,10 +82,6 @@ type ServerConfig struct {
 	// If nil, no information about state transitions are dispatched
 	// by the library.
 	StateChanges chan<- *ClientStateChange
-
-	// Director is a function that modifies HTTP request into a new HTTP request
-	// before sending to client. If nil no modifications are done.
-	Director func(*http.Request)
 
 	// Debug enables debug mode, enable only if you want to debug the server
 	Debug bool
@@ -132,12 +122,10 @@ func NewServer(cfg *ServerConfig) (*Server, error) {
 		sessions:              make(map[string]*yamux.Session),
 		onConnectCallbacks:    newCallbacks("OnConnect"),
 		onDisconnectCallbacks: newCallbacks("OnDisconnect"),
-		virtualHosts:          newVirtualHosts(),
 		virtualAddrs:          newVirtualAddrs(opts),
 		controls:              newControls(),
 		states:                make(map[string]ClientState),
 		stateCh:               cfg.StateChanges,
-		httpDirector:          cfg.Director,
 		yamuxConfig:           yamuxConfig,
 		connCh:                connCh,
 		log:                   log,
@@ -146,108 +134,6 @@ func NewServer(cfg *ServerConfig) (*Server, error) {
 	go s.serveTCP()
 
 	return s, nil
-}
-
-// ServeHTTP is a tunnel that creates an http/websocket tunnel between a
-// public connection and the client connection.
-func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// if the user didn't add the control and tunnel handler manually, we'll
-	// going to infer and call the respective path handlers.
-	switch path.Clean(r.URL.Path) + "/" {
-	case proto.ControlPath:
-		s.checkConnect(s.controlHandler).ServeHTTP(w, r)
-		return
-	}
-
-	if err := s.handleHTTP(w, r); err != nil {
-		if !strings.Contains(err.Error(), "no virtual host available") { // this one is outputted too much, unnecessarily
-			s.log.Error("remote %s (%s): %s", r.RemoteAddr, r.RequestURI, err)
-		}
-		http.Error(w, err.Error(), http.StatusBadGateway)
-	}
-}
-
-// handleHTTP handles a single HTTP request
-func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) error {
-	s.log.Debug("HandleHTTP request:")
-	s.log.Debug("%v", r)
-
-	if s.httpDirector != nil {
-		s.httpDirector(r)
-	}
-
-	hostPort := strings.ToLower(r.Host)
-	if hostPort == "" {
-		return errors.New("request host is empty")
-	}
-
-	// if someone hits foo.example.com:8080, this should be proxied to
-	// localhost:8080, so send the port to the client so it knows how to proxy
-	// correctly. If no port is available, it's up to client how to interpret it
-	host, port, err := parseHostPort(hostPort)
-	if err != nil {
-		// no need to return, just continue lazily, port will be 0, which in
-		// our case will be proxied to client's local servers port 80
-		s.log.Debug("No port available for %q, sending port 80 to client", hostPort)
-	}
-
-	// get the identifier associated with this host
-	identifier, ok := s.getIdentifier(hostPort)
-	if !ok {
-		// fallback to host
-		identifier, ok = s.getIdentifier(host)
-		if !ok {
-			return fmt.Errorf("no virtual host available for %q", hostPort)
-		}
-	}
-
-	if isWebsocketConn(r) {
-		s.log.Debug("handling websocket connection")
-
-		return s.handleWSConn(w, r, identifier, port)
-	}
-
-	stream, err := s.dial(identifier, proto.HTTP, port)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		s.log.Debug("Closing stream")
-		stream.Close()
-	}()
-
-	if err := r.Write(stream); err != nil {
-		return err
-	}
-
-	s.log.Debug("Session opened to client, writing request to client")
-	resp, err := http.ReadResponse(bufio.NewReader(stream), r)
-	if err != nil {
-		return fmt.Errorf("read from tunnel: %s", err.Error())
-	}
-
-	defer func() {
-		if resp.Body != nil {
-			if err := resp.Body.Close(); err != nil && err != io.ErrUnexpectedEOF {
-				s.log.Error("resp.Body Close error: %s", err.Error())
-			}
-		}
-	}()
-
-	s.log.Debug("Response received, writing back to public connection: %+v", resp)
-
-	copyHeader(w.Header(), resp.Header)
-	w.WriteHeader(resp.StatusCode)
-
-	if _, err := io.Copy(w, resp.Body); err != nil {
-		if err == io.ErrUnexpectedEOF {
-			s.log.Debug("Client closed the connection, couldn't copy response")
-		} else {
-			s.log.Error("copy err: %s", err) // do not return, because we might write multipe headers
-		}
-	}
-
-	return nil
 }
 
 func (s *Server) serveTCP() {
@@ -262,49 +148,6 @@ func (s *Server) serveTCPConn(conn net.Conn) {
 		s.log.Warning("failed to serve %q: %s", conn.RemoteAddr(), err)
 		conn.Close()
 	}
-}
-
-func (s *Server) handleWSConn(w http.ResponseWriter, r *http.Request, ident string, port int) error {
-	hj, ok := w.(http.Hijacker)
-	if !ok {
-		return fmt.Errorf("webserver doesn't support hijacking: %T", w)
-	}
-
-	conn, _, err := hj.Hijack()
-	if err != nil {
-		return fmt.Errorf("hijack not possible: %s", err)
-	}
-
-	stream, err := s.dial(ident, proto.WS, port)
-	if err != nil {
-		return err
-	}
-
-	if err := r.Write(stream); err != nil {
-		err = errors.New("unable to write upgrade request: " + err.Error())
-		return nonil(err, stream.Close())
-	}
-
-	resp, err := http.ReadResponse(bufio.NewReader(stream), r)
-	if err != nil {
-		err = errors.New("unable to read upgrade response: " + err.Error())
-		return nonil(err, stream.Close())
-	}
-
-	if err := resp.Write(conn); err != nil {
-		err = errors.New("unable to write upgrade response: " + err.Error())
-		return nonil(err, stream.Close())
-	}
-
-	var wg sync.WaitGroup
-	wg.Add(2)
-
-	go s.proxy(&wg, conn, stream)
-	go s.proxy(&wg, stream, conn)
-
-	wg.Wait()
-
-	return nonil(stream.Close(), conn.Close())
 }
 
 func (s *Server) handleTCPConn(conn net.Conn) error {
@@ -393,9 +236,9 @@ func (s *Server) dial(identifier string, p proto.Type, port int) (net.Conn, erro
 // tunnel TCP connections.
 func (s *Server) controlHandler(w http.ResponseWriter, r *http.Request) (ctErr error) {
 	identifier := r.Header.Get(proto.ClientIdentifierHeader)
-	_, ok := s.getHost(identifier)
+	ok := s.hasIdentifier(identifier)
 	if !ok {
-		return fmt.Errorf("no host associated for identifier %s. please use server.AddHost()", identifier)
+		return fmt.Errorf("no host associated for identifier %s. please use server.AddAddr()", identifier)
 	}
 
 	ct, ok := s.getControl(identifier)
@@ -492,8 +335,7 @@ func (s *Server) listenControl(ct *control) {
 		var msg map[string]interface{}
 		err := ct.dec.Decode(&msg)
 		if err != nil {
-			host, _ := s.getHost(ct.identifier)
-			s.log.Debug("Closing client connection: '%s', %s'", host, ct.identifier)
+			s.log.Debug("Closing client connection:  '%s'", ct.identifier)
 
 			// close client connection so it reconnects again
 			ct.Close()
@@ -578,16 +420,16 @@ func (s *Server) changeState(identifier string, state ClientState, err error) (p
 	return prev
 }
 
-// AddHost adds the given virtual host and maps it to the identifier.
-func (s *Server) AddHost(host, identifier string) {
-	s.virtualHosts.AddHost(host, identifier)
-}
+// // AddHost adds the given virtual host and maps it to the identifier.
+// func (s *Server) AddHost(host, identifier string) {
+// 	s.virtualHosts.AddHost(host, identifier)
+// }
 
-// DeleteHost deletes the given virtual host. Once removed any request to this
-// host is denied.
-func (s *Server) DeleteHost(host string) {
-	s.virtualHosts.DeleteHost(host)
-}
+// // DeleteHost deletes the given virtual host. Once removed any request to this
+// // host is denied.
+// func (s *Server) DeleteHost(host string) {
+// 	s.virtualHosts.DeleteHost(host)
+// }
 
 // AddAddr starts accepting connections on listener l, routing every connection
 // to a tunnel client given by the identifier.
@@ -612,14 +454,8 @@ func (s *Server) DeleteAddr(l net.Listener, ip net.IP) {
 	s.virtualAddrs.Delete(l, ip)
 }
 
-func (s *Server) getIdentifier(host string) (string, bool) {
-	identifier, ok := s.virtualHosts.GetIdentifier(host)
-	return identifier, ok
-}
-
-func (s *Server) getHost(identifier string) (string, bool) {
-	host, ok := s.virtualHosts.GetHost(identifier)
-	return host, ok
+func (s *Server) hasIdentifier(identifier string) bool {
+	return s.virtualAddrs.HasIdentifier(identifier)
 }
 
 func (s *Server) addControl(identifier string, conn *control) {
@@ -710,11 +546,6 @@ func parseHostPort(addr string) (string, int, error) {
 	}
 
 	return host, int(n), nil
-}
-
-func isWebsocketConn(r *http.Request) bool {
-	return r.Method == "GET" && headerContains(r.Header["Connection"], "upgrade") &&
-		headerContains(r.Header["Upgrade"], "websocket")
 }
 
 // headerContains is a copy of tokenListContainsValue from gorilla/websocket/util.go

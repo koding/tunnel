@@ -212,10 +212,6 @@ func NewClient(cfg *ClientConfig) (*Client, error) {
 	// DEPRECATED API SUPPORT
 	if cfg.LocalAddr != "" || cfg.FetchLocalAddr != nil {
 		var f ProxyFuncs
-		if cfg.LocalAddr != "" {
-			f.HTTP = (&HTTPProxy{LocalAddr: cfg.LocalAddr}).Proxy
-			f.WS = (&HTTPProxy{LocalAddr: cfg.LocalAddr}).Proxy
-		}
 		if cfg.FetchLocalAddr != nil {
 			f.TCP = (&TCPProxy{FetchLocalAddr: cfg.FetchLocalAddr}).Proxy
 		}
