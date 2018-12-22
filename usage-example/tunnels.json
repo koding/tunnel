@@ -1,0 +1,8 @@
+[
+    {
+        "ClientIdentifier": "TestClient1",
+        "FrontEndListenPort": 9000,
+        "BackEndPort": 9001,
+        "ProxyProtocol": true
+    }
+]

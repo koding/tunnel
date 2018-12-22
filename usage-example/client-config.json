@@ -1,0 +1,7 @@
+{
+    "DebugLog": false,
+	"ClientIdentifier": "TestClient1",
+	"ServerHost": "localhost",
+	"ServerTunnelControlPort": 9056,
+	"ServerManagementPort":  9057
+}

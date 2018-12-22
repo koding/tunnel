@@ -1,0 +1,6 @@
+
+{
+    "DebugLog": false,
+	"TunnelControlPort": 9056,
+	"ManagementPort":  9057
+}

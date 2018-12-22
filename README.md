@@ -7,14 +7,16 @@ It is intended to be used to make it easier for non-tech-savvy people to host we
 
 This repository only includes the application that does the tunneling part.  It does not include any other management or automation tools.
 
+See the usage example folder for a basic test.
+
 ![Diagram](readme/Diagram.png)
 
 ### How it is intended to be used:
 
 1. An automated tool creates a cloud instance and installs and configures the tunnel server on it. 
-1. An automated tool installs the tunnel client on the self-hoster's server computer.
-1. The tunnel client connects to the tunnel server on the Tunnel Control Port. This connection will use TLS Client Authentication. This connection will be held open and re-created if dropped. 
+1. An automated tool installs the tunnel client on the self-hoster's server computer. 
 1. An automated tool calls the `PUT /tunnels` api on the tunnel server's Management Port, and sends a JSON file describing which ports should be opened on the tunnel server, which client they should be tunneled to, and which ports on the client they should be tunneled to, as well as whether or not the HAProxy "PROXY" protocol should be used. This connection will also use TLS Client Authentication.
+1. The tunnel client connects to the tunnel server on the Tunnel Control Port. This connection will use TLS Client Authentication. This connection will be held open and re-created if dropped.
 1. An internet user connects to the tunnel server on one of the ports defined in the JSON. The internet user's request is tunneled through the original connection from the tunnel client, and then proxied to the web server software running on the self-hoster's server computer.
 
 ### Why did you set it up this way?
@@ -32,3 +34,7 @@ I have a few requirements for this system.
 1. Added support for HAProxy "PROXY" protocol. 
 1. Added support for Port mappings between front end and back end.
 1. Fixed various bugs related to connection lifecycle.
+
+### Issues
+
+Unfortunately right now the tunnels config has to put set 1st before the client can connect. I'll probably fix this later.
