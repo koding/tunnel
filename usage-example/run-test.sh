@@ -37,7 +37,7 @@ CLIENT_PID=$!
 sleep 1
 
 # Start the "sender" test app 
-# It listens on port 9001.  This would be your end user who wants to use the web application.
+# It connects to the front end port of the tunnel (port 9000).  This would be your end user who wants to use the web application.
 ./sender 2>&1  >> test.log  &
 SENDER_PID=$!
 
