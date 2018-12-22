@@ -5,9 +5,11 @@ This project was originally forked from https://github.com/koding/tunnel
 
 It is intended to be used to make it easier for non-tech-savvy people to host web services that are avaliable on the public internet.
 
+This repository only includes the application that does the tunneling part.  It does not include any other management or automation tools.
+
 ![Diagram](readme/Diagram.png)
 
-### How it works:
+### How it is intended to be used:
 
 1. An automated tool creates a cloud instance and installs and configures the tunnel server on it. 
 1. An automated tool installs the tunnel client on the self-hoster's server computer.
