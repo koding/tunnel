@@ -7,17 +7,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
-	"os"
 	"path"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/koding/logging"
-	"github.com/koding/tunnel/proto"
+	"git.sequentialread.com/forest/tunnel/tunnel-lib/proto"
 
 	"github.com/hashicorp/yamux"
 )
@@ -71,7 +70,7 @@ type Server struct {
 	// yamuxConfig is passed to new yamux.Session's
 	yamuxConfig *yamux.Config
 
-	log logging.Logger
+	debugLog bool
 }
 
 // ServerConfig defines the configuration for the Server
@@ -84,11 +83,7 @@ type ServerConfig struct {
 	// by the library.
 	StateChanges chan<- *ClientStateChange
 
-	// Debug enables debug mode, enable only if you want to debug the server
-	Debug bool
-
-	// Log defines the logger. If nil a default logging.Logger is used.
-	Log logging.Logger
+	DebugLog bool
 
 	// YamuxConfig defines the config which passed to every new yamux.Session. If nil
 	// yamux.DefaultConfig() is used.
@@ -106,16 +101,10 @@ func NewServer(cfg *ServerConfig) (*Server, error) {
 		yamuxConfig = cfg.YamuxConfig
 	}
 
-	log := newLogger("tunnel-server", cfg.Debug)
-	if cfg.Log != nil {
-		log = cfg.Log
-	}
-
 	connCh := make(chan net.Conn)
 
 	opts := &vaddrOptions{
 		connCh: connCh,
-		log:    log,
 	}
 
 	s := &Server{
@@ -129,7 +118,7 @@ func NewServer(cfg *ServerConfig) (*Server, error) {
 		stateCh:               cfg.StateChanges,
 		yamuxConfig:           yamuxConfig,
 		connCh:                connCh,
-		log:                   log,
+		debugLog:              cfg.DebugLog,
 	}
 
 	go s.serveTCP()
@@ -139,16 +128,21 @@ func NewServer(cfg *ServerConfig) (*Server, error) {
 
 // ServeHTTP is a tunnel that creates an http/websocket tunnel between a
 // public connection and the client connection.
-func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (s *Server) ServeHTTP(responseWriter http.ResponseWriter, request *http.Request) {
 	// if the user didn't add the control and tunnel handler manually, we'll
 	// going to infer and call the respective path handlers.
-	switch path.Clean(r.URL.Path) + "/" {
+	switch fmt.Sprintf("%s/", path.Clean(request.URL.Path)) {
 	case proto.ControlPath:
-		s.checkConnect(s.controlHandler).ServeHTTP(w, r)
-		return
+		s.checkConnect(s.controlHandler).ServeHTTP(responseWriter, request)
+	case "/ping/":
+		if request.Method == "GET" {
+			fmt.Fprint(responseWriter, "pong!")
+		} else {
+			http.Error(responseWriter, "405 method not allowed", http.StatusMethodNotAllowed)
+		}
+	default:
+		http.Error(responseWriter, "404 not found", http.StatusNotFound)
 	}
-
-	http.Error(w, "404 not found", http.StatusNotFound)
 }
 
 func (s *Server) serveTCP() {
@@ -160,7 +154,7 @@ func (s *Server) serveTCP() {
 func (s *Server) serveTCPConn(conn net.Conn) {
 	err := s.handleTCPConn(conn)
 	if err != nil {
-		s.log.Warning("failed to serve %q: %s", conn.RemoteAddr(), err)
+		log.Printf("Server.serveTCPConn(): failed to serve %q: %s\n", conn.RemoteAddr(), err)
 		conn.Close()
 	}
 }
@@ -216,9 +210,13 @@ func (s *Server) handleTCPConn(conn net.Conn) error {
 func (s *Server) proxy(disconnectedChan chan bool, dst, src net.Conn, side string) {
 	defer (func() { disconnectedChan <- true })()
 
-	s.log.Debug("tunneling %s -> %s (%s)", src.RemoteAddr(), dst.RemoteAddr(), side)
+	if s.debugLog {
+		log.Printf("Server.proxy(): tunneling %s -> %s (%s)\n", src.RemoteAddr(), dst.RemoteAddr(), side)
+	}
 	n, err := io.Copy(dst, src)
-	s.log.Debug("tunneled %d bytes %s -> %s (%s): %v", n, src.RemoteAddr(), dst.RemoteAddr(), side, err)
+	if s.debugLog {
+		log.Printf("Server.proxy(): tunneled %d bytes %s -> %s (%s): %v\n", n, src.RemoteAddr(), dst.RemoteAddr(), side, err)
+	}
 }
 
 func (s *Server) dial(identifier string, p proto.Type, port int) (net.Conn, error) {
@@ -238,7 +236,9 @@ func (s *Server) dial(identifier string, p proto.Type, port int) (net.Conn, erro
 		LocalPort: port,
 	}
 
-	s.log.Debug("Sending control msg %+v", msg)
+	if s.debugLog {
+		log.Printf("Server.proxy(): Sending control msg %+v\n", msg)
+	}
 
 	// ask client to open a session to us, so we can accept it
 	if err := control.send(msg); err != nil {
@@ -258,7 +258,9 @@ func (s *Server) dial(identifier string, p proto.Type, port int) (net.Conn, erro
 	}
 
 	// if we don't receive anything from the client, we'll timeout
-	s.log.Debug("Waiting for session accept")
+	if s.debugLog {
+		log.Println("Server.proxy(): Waiting for session accept")
+	}
 
 	select {
 	case err := <-async(acceptStream):
@@ -282,11 +284,13 @@ func (s *Server) controlHandler(w http.ResponseWriter, r *http.Request) (ctErr e
 		ct.Close()
 		s.deleteControl(identifier)
 		s.deleteSession(identifier)
-		s.log.Warning("Control connection for %q already exists. This is a race condition and needs to be fixed on client implementation", identifier)
+		log.Printf("Server.controlHandler(): Control connection for %q already exists. This is a race condition and needs to be fixed on client implementation\n", identifier)
 		return fmt.Errorf("control conn for %s already exist. \n", identifier)
 	}
 
-	s.log.Debug("Tunnel with identifier %s", identifier)
+	if s.debugLog {
+		log.Printf("Server.controlHandler(): Tunnel with identifier %s", identifier)
+	}
 
 	hj, ok := w.(http.Hijacker)
 	if !ok {
@@ -306,7 +310,10 @@ func (s *Server) controlHandler(w http.ResponseWriter, r *http.Request) (ctErr e
 		return fmt.Errorf("error setting connection deadline: %s", err)
 	}
 
-	s.log.Debug("Creating control session")
+	if s.debugLog {
+		log.Println("Server.controlHandler(): Creating control session")
+	}
+
 	session, err := yamux.Server(conn, s.yamuxConfig)
 	if err != nil {
 		return err
@@ -340,7 +347,10 @@ func (s *Server) controlHandler(w http.ResponseWriter, r *http.Request) (ctErr e
 		return errors.New("timeout getting session")
 	}
 
-	s.log.Debug("Initiating handshake protocol")
+	if s.debugLog {
+		log.Println("Server.controlHandler(): Initiating handshake protocol")
+	}
+
 	buf := make([]byte, len(proto.HandshakeRequest))
 	if _, err := stream.Read(buf); err != nil {
 		return err
@@ -359,7 +369,9 @@ func (s *Server) controlHandler(w http.ResponseWriter, r *http.Request) (ctErr e
 	s.addControl(identifier, ct)
 	go s.listenControl(ct)
 
-	s.log.Debug("Control connection is setup")
+	if s.debugLog {
+		log.Println("Server.controlHandler(): Control connection is setup")
+	}
 	return nil
 }
 
@@ -371,7 +383,9 @@ func (s *Server) listenControl(ct *control) {
 		var msg map[string]interface{}
 		err := ct.dec.Decode(&msg)
 		if err != nil {
-			s.log.Debug("Closing client connection:  '%s'", ct.identifier)
+			if s.debugLog {
+				log.Printf("Server.listenControl(): Closing client connection:  '%s'\n", ct.identifier)
+			}
 
 			// close client connection so it reconnects again
 			ct.Close()
@@ -383,7 +397,7 @@ func (s *Server) listenControl(ct *control) {
 			s.onDisconnect(ct.identifier, err)
 
 			if err != io.EOF {
-				s.log.Error("decode err: %s", err)
+				log.Printf("Server.listenControl(): decode err: %s\n", err)
 			}
 			return
 		}
@@ -391,7 +405,9 @@ func (s *Server) listenControl(ct *control) {
 		// right now we don't do anything with the messages, but because the
 		// underlying connection needs to establihsed, we know when we have
 		// disconnection(above), so we can cleanup the connection.
-		s.log.Debug("msg: %s", msg)
+		if s.debugLog {
+			log.Printf("Server.listenControl(): msg: %s\n", msg)
+		}
 	}
 }
 
@@ -407,7 +423,7 @@ func (s *Server) OnConnect(identifier string, fn func() error) {
 // or stateChanges chanel readers) when client connects.
 func (s *Server) onConnect(identifier string) {
 	if err := s.onConnectCallbacks.call(identifier); err != nil {
-		s.log.Error("OnConnect: error calling callback for %q: %s", identifier, err)
+		log.Printf("Server.onConnect(): error calling callback for %q: %s\n", identifier, err)
 	}
 
 	s.changeState(identifier, ClientConnected, nil)
@@ -425,7 +441,7 @@ func (s *Server) OnDisconnect(identifier string, fn func() error) {
 // or stateChanges chanel readers) when client disconnects.
 func (s *Server) onDisconnect(identifier string, err error) {
 	if err := s.onDisconnectCallbacks.call(identifier); err != nil {
-		s.log.Error("OnDisconnect: error calling callback for %q: %s", identifier, err)
+		log.Printf("Server.onDisconnect(): error calling callback for %q: %s\n", identifier, err)
 	}
 
 	s.changeState(identifier, ClientClosed, err)
@@ -449,7 +465,7 @@ func (s *Server) changeState(identifier string, state ClientState, err error) (p
 		select {
 		case s.stateCh <- change:
 		default:
-			s.log.Warning("Dropping state change due to slow reader: %s", change)
+			log.Printf("Server.changeState() Dropping state change due to slow reader: %s\n", change)
 		}
 	}
 
@@ -559,7 +575,7 @@ func (s *Server) checkConnect(fn func(w http.ResponseWriter, r *http.Request) er
 		}
 
 		if err := fn(w, r); err != nil {
-			s.log.Error("Handler err: %v", err.Error())
+			log.Printf("Server.checkConnect(): Handler err: %v\n", err.Error())
 
 			if identifier := r.Header.Get(proto.ClientIdentifierHeader); identifier != "" {
 				s.onDisconnect(identifier, err)
@@ -605,18 +621,4 @@ func nonil(err ...error) error {
 	}
 
 	return nil
-}
-
-func newLogger(name string, debug bool) logging.Logger {
-	log := logging.NewLogger(name)
-	logHandler := logging.NewWriterHandler(os.Stderr)
-	logHandler.Colorize = true
-	log.SetHandler(logHandler)
-
-	if debug {
-		log.SetLevel(logging.DEBUG)
-		logHandler.SetLevel(logging.DEBUG)
-	}
-
-	return log
 }

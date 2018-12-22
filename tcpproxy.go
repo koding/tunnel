@@ -2,14 +2,10 @@ package tunnel
 
 import (
 	"fmt"
+	"log"
 	"net"
 
-	"github.com/koding/logging"
-	"github.com/koding/tunnel/proto"
-)
-
-var (
-	tpcLog = logging.NewLogger("tcp")
+	"git.sequentialread.com/forest/tunnel/tunnel-lib/proto"
 )
 
 // TCPProxy forwards TCP streams.
@@ -32,7 +28,7 @@ type TCPProxy struct {
 	FetchLocalAddr func(port int) (string, error)
 	// Log is a custom logger that can be used for the proxy.
 	// If not set a "tcp" logger is used.
-	Log logging.Logger
+	DebugLog bool
 }
 
 // Proxy is a ProxyFunc.
@@ -41,11 +37,9 @@ func (p *TCPProxy) Proxy(remote net.Conn, msg *proto.ControlMessage) {
 		panic("Proxy mismatch")
 	}
 
-	var log = p.log()
-
 	var port = msg.LocalPort
 	if port == 0 {
-		log.Warning("TCP proxy to port 0")
+		log.Println("TCPProxy.Proxy(): TCP proxy to port 0")
 	}
 
 	var localAddr = fmt.Sprintf("127.0.0.1:%d", port)
@@ -54,7 +48,7 @@ func (p *TCPProxy) Proxy(remote net.Conn, msg *proto.ControlMessage) {
 	} else if p.FetchLocalAddr != nil {
 		l, err := p.FetchLocalAddr(msg.LocalPort)
 		if err != nil {
-			log.Warning("Failed to get custom local address: %s", err)
+			log.Println("TCPProxy.Proxy(): Failed to get custom local address: %s", err)
 			return
 		}
 		localAddr = l
@@ -64,16 +58,9 @@ func (p *TCPProxy) Proxy(remote net.Conn, msg *proto.ControlMessage) {
 	//fmt.Printf("Dialing local server: %q\n\n", localAddr)
 	local, err := net.DialTimeout("tcp", localAddr, defaultTimeout)
 	if err != nil {
-		log.Error("Dialing local server %q failed: %s", localAddr, err)
+		log.Println("TCPProxy.Proxy(): Dialing local server %q failed: %s", localAddr, err)
 		return
 	}
 
-	Join(local, remote, log)
-}
-
-func (p *TCPProxy) log() logging.Logger {
-	if p.Log != nil {
-		return p.Log
-	}
-	return tpcLog
+	Join(local, remote, p.DebugLog)
 }

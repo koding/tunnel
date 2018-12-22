@@ -2,12 +2,12 @@ package tunnel
 
 import (
 	"io"
+	"log"
 	"net"
 	"strings"
 	"sync"
 
-	"github.com/koding/logging"
-	"github.com/koding/tunnel/proto"
+	"git.sequentialread.com/forest/tunnel/tunnel-lib/proto"
 )
 
 // ProxyFunc is responsible for forwarding a remote connection to local server and writing the response back.
@@ -38,7 +38,7 @@ func Proxy(p ProxyFuncs) ProxyFunc {
 		}
 
 		if f == nil {
-			logging.Error("Could not determine proxy function for %v", msg)
+			log.Printf("Proxy(): Could not determine proxy function for %v\n", msg)
 			remote.Close()
 		}
 
@@ -49,31 +49,39 @@ func Proxy(p ProxyFuncs) ProxyFunc {
 // Join copies data between local and remote connections.
 // It reads from one connection and writes to the other.
 // It's a building block for ProxyFunc implementations.
-func Join(local, remote net.Conn, log logging.Logger) {
+func Join(local, remote net.Conn, debugLog bool) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 
 	transfer := func(side string, dst, src net.Conn) {
-		log.Debug("proxing %s -> %s", src.RemoteAddr(), dst.RemoteAddr())
+		if debugLog {
+			log.Printf("Join(): proxying %s -> %s\n", src.RemoteAddr(), dst.RemoteAddr())
+		}
 
 		n, err := io.Copy(dst, src)
 		// either the backend server being proxied,
 		// or the client talking to the backend server through the proxy may close the connection at any time.
 		// This is fine, and in that case we simply completely close and clean up this connection.
 		if err != nil && !strings.Contains(err.Error(), "use of closed") {
-			log.Error("%s: copy error: %s", side, err)
+			log.Printf("Join(): %s: copy error: %s\n", side, err)
 		}
 
 		if err := src.Close(); err != nil {
-			log.Debug("%s: close error: %s", side, err)
+			if debugLog {
+				log.Printf("Join(): %s: close error: %s\n", side, err)
+			}
 		}
 
 		if err := dst.Close(); err != nil {
-			log.Debug("%s: closeWrite error: %s", side, err)
+			if debugLog {
+				log.Printf("Join(): %s: closeWrite error: %s\n", side, err)
+			}
 		}
 
 		wg.Done()
-		log.Debug("done proxing %s -> %s: %d bytes", src.RemoteAddr(), dst.RemoteAddr(), n)
+		if debugLog {
+			log.Printf("Join(): done proxying %s -> %s: %d bytes\n", src.RemoteAddr(), dst.RemoteAddr(), n)
+		}
 	}
 
 	go transfer("remote to local", local, remote)

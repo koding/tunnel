@@ -1,12 +1,11 @@
 package tunnel
 
 import (
+	"log"
 	"net"
 	"strconv"
 	"sync"
 	"sync/atomic"
-
-	"github.com/koding/logging"
 )
 
 type ListenerInfo struct {
@@ -33,7 +32,6 @@ type listener struct {
 
 type vaddrOptions struct {
 	connCh chan<- net.Conn
-	log    logging.Logger
 }
 
 type vaddrStorage struct {
@@ -59,12 +57,12 @@ func (l *listener) serve() {
 	for {
 		conn, err := l.Accept()
 		if err != nil {
-			l.log.Error("failue listening on %q: %s", l.Addr(), err)
+			log.Printf("listener.serve(): failue listening on %q: %s\n", l.Addr(), err)
 			return
 		}
 
 		if atomic.LoadInt32(&l.done) != 0 {
-			l.log.Debug("stopped serving %q", l.Addr())
+			log.Printf("listener.serve(): stopped serving %q", l.Addr())
 			conn.Close()
 			return
 		}
@@ -186,7 +184,7 @@ func (vaddr *vaddrStorage) getListenerInfo(conn net.Conn) (*ListenerInfo, bool) 
 
 	_, port, err := parseHostPort(conn.LocalAddr().String())
 	if err != nil {
-		vaddr.log.Debug("failed to get identifier for connection %q: %s", conn.LocalAddr(), err)
+		log.Printf("vaddrStorage.getListenerInfo(): failed to get identifier for connection %q: %s", conn.LocalAddr(), err)
 		return nil, false
 	}
 

@@ -5,14 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"net"
 	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/koding/logging"
-	"github.com/koding/tunnel/proto"
+	"git.sequentialread.com/forest/tunnel/tunnel-lib/proto"
 
 	"github.com/hashicorp/yamux"
 )
@@ -97,8 +97,6 @@ type Client struct {
 
 	// redialBackoff is used to reconnect in exponential backoff intervals
 	redialBackoff Backoff
-
-	log logging.Logger
 }
 
 // ClientConfig defines the configuration for the Client
@@ -153,11 +151,8 @@ type ClientConfig struct {
 	// yamux.DefaultConfig() is used.
 	YamuxConfig *yamux.Config
 
-	// Log defines the logger. If nil a default logging.Logger is used.
-	Log logging.Logger
-
 	// Debug enables debug mode, enable only if you want to debug the server.
-	Debug bool
+	DebugLog bool
 
 	// DEPRECATED:
 
@@ -213,7 +208,7 @@ func NewClient(cfg *ClientConfig) (*Client, error) {
 	if cfg.LocalAddr != "" || cfg.FetchLocalAddr != nil {
 		var f ProxyFuncs
 		if cfg.FetchLocalAddr != nil {
-			f.TCP = (&TCPProxy{FetchLocalAddr: cfg.FetchLocalAddr}).Proxy
+			f.TCP = (&TCPProxy{FetchLocalAddr: cfg.FetchLocalAddr, DebugLog: cfg.DebugLog}).Proxy
 		}
 		proxy = Proxy(f)
 	}
@@ -223,18 +218,12 @@ func NewClient(cfg *ClientConfig) (*Client, error) {
 		bo = cfg.Backoff
 	}
 
-	log := newLogger("tunnel-client", cfg.Debug)
-	if cfg.Log != nil {
-		log = cfg.Log
-	}
-
 	client := &Client{
 		config:        cfg,
 		yamuxConfig:   yamuxConfig,
 		proxy:         proxy,
 		startNotify:   make(chan bool, 1),
 		redialBackoff: bo,
-		log:           log,
 	}
 
 	return client, nil
@@ -289,14 +278,14 @@ func (c *Client) Start() {
 		identifier, err := fetchIdent()
 		if err != nil {
 			lastErr = err
-			c.log.Critical("client fetch identifier error: %s", err)
+			log.Printf("Client.Start(): client fetch identifier error: %s\n", err)
 			continue
 		}
 
 		serverAddr, err := fetchServerAddr()
 		if err != nil {
 			lastErr = err
-			c.log.Critical("client fetch server address error: %s", err)
+			log.Printf("Client.Start(): client fetch server address error: %s\n", err)
 			continue
 		}
 
@@ -304,7 +293,10 @@ func (c *Client) Start() {
 
 		if err := c.connect(identifier, serverAddr); err != nil {
 			lastErr = err
-			c.log.Debug("client connect error: %s", err)
+			if c.config.DebugLog {
+				log.Printf("Client.Start(): client connect error: %s\n", err)
+			}
+
 		}
 
 		// exit if closed
@@ -327,7 +319,9 @@ func (c *Client) Close() error {
 	waitCh := make(chan struct{})
 	go func() {
 		if err := c.session.GoAway(); err != nil {
-			c.log.Debug("Session go away failed: %s", err)
+			if c.config.DebugLog {
+				log.Printf("Client.Close(): Session go away failed: %s\n", err)
+			}
 		}
 
 		c.reqWg.Wait()
@@ -337,7 +331,7 @@ func (c *Client) Close() error {
 	case <-waitCh:
 		// ok
 	case <-time.After(time.Second * 10):
-		c.log.Info("Timeout waiting for connections to finish")
+		log.Printf("Client.Close(): Timeout waiting for connections to finish\n")
 	}
 
 	if err := c.session.Close(); err != nil {
@@ -377,7 +371,9 @@ func (c *Client) setClosed(closed bool) {
 func (c *Client) startNotifyIfNeeded() {
 	c.closedMu.RLock()
 	if !c.closed {
-		c.log.Debug("sending ok to startNotify chan")
+		if c.config.DebugLog {
+			log.Println("Client.startNotifyIfNeeded(): sending ok to startNotify chan")
+		}
 		select {
 		case c.startNotify <- true:
 		default:
@@ -385,7 +381,9 @@ func (c *Client) startNotifyIfNeeded() {
 			// StartNotify(). This is OK, we shouldn't except it the consumer
 			// to read from this channel. It's optional, so we just drop the
 			// signal.
-			c.log.Debug("startNotify message was dropped")
+			if c.config.DebugLog {
+				log.Println("Client.startNotifyIfNeeded(): startNotify message was dropped")
+			}
 		}
 	}
 	c.closedMu.RUnlock()
@@ -411,7 +409,7 @@ func (c *Client) changeState(state ClientState, err error) (prev ClientState) {
 		select {
 		case c.config.StateChanges <- change:
 		default:
-			c.log.Warning("Dropping state change due to slow reader: %s", change)
+			log.Printf("Client.StartNotify(): Dropping state change due to slow reader: %s", change)
 		}
 	}
 
@@ -425,7 +423,9 @@ func (c *Client) isRetry(state ClientState) bool {
 }
 
 func (c *Client) connect(identifier, serverAddr string) error {
-	c.log.Debug("Trying to connect to %q with identifier %q", serverAddr, identifier)
+	if c.config.DebugLog {
+		log.Printf("Client.connect(): Trying to connect to %q with identifier %q\n", serverAddr, identifier)
+	}
 
 	conn, err := c.dial(serverAddr)
 	if err != nil {
@@ -433,7 +433,9 @@ func (c *Client) connect(identifier, serverAddr string) error {
 	}
 
 	remoteURL := controlURL(conn)
-	c.log.Debug("CONNECT to %q", remoteURL)
+	if c.config.DebugLog {
+		log.Printf("Client.connect(): CONNECT to %q\n", remoteURL)
+	}
 	req, err := http.NewRequest("CONNECT", remoteURL, nil)
 	if err != nil {
 		return fmt.Errorf("error creating request to %s: %s", remoteURL, err)
@@ -441,13 +443,17 @@ func (c *Client) connect(identifier, serverAddr string) error {
 
 	req.Header.Set(proto.ClientIdentifierHeader, identifier)
 
-	c.log.Debug("Writing request to TCP: %+v", req)
+	if c.config.DebugLog {
+		log.Printf("Client.connect(): Writing request to TCP: %+v\n", req)
+	}
 
 	if err := req.Write(conn); err != nil {
 		return fmt.Errorf("writing CONNECT request to %s failed: %s", req.URL, err)
 	}
 
-	c.log.Debug("Reading response from TCP")
+	if c.config.DebugLog {
+		log.Println("Client.connect(): Reading response from TCP")
+	}
 
 	resp, err := http.ReadResponse(bufio.NewReader(conn), req)
 	if err != nil {
@@ -505,7 +511,9 @@ func (c *Client) connect(identifier, serverAddr string) error {
 	}
 
 	ct := newControl(stream)
-	c.log.Debug("client has started successfully")
+	if c.config.DebugLog {
+		log.Println("Client.connect(): client has started successfully")
+	}
 	c.redialBackoff.Reset() // we successfully connected, so we can reset the backoff
 
 	c.startNotifyIfNeeded()
@@ -538,8 +546,10 @@ func (c *Client) listenControl(ct *control) error {
 			return fmt.Errorf("failure decoding control message: %s", err)
 		}
 
-		c.log.Debug("Received control msg %+v", msg)
-		c.log.Debug("Opening a new stream from server session")
+		if c.config.DebugLog {
+			log.Printf("Client.connect(): Received control msg %+v\n", msg)
+			log.Println("Client.connect(): Opening a new stream from server session")
+		}
 
 		remote, err := c.session.Open()
 		if err != nil {
@@ -548,7 +558,9 @@ func (c *Client) listenControl(ct *control) error {
 
 		go func() {
 			c.proxy(remote, &msg)
-			c.log.Debug("Closing server session")
+			if c.config.DebugLog {
+				log.Println("Client.connect(): Closing server session")
+			}
 			remote.Close()
 		}()
 	}

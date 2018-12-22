@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/koding/tunnel/proto"
+	"git.sequentialread.com/forest/tunnel/tunnel-lib/proto"
 
 	"github.com/cenkalti/backoff"
 )
