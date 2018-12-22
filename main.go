@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io/ioutil"
+	"net"
 	"net/http"
 	"os"
 	"path"
@@ -29,8 +30,18 @@ type ClientConfig struct {
 type ListenerConfig struct {
 	ProxyProtocol      bool
 	FrontEndListenPort int
-	BackEndListenPort  int
+	BackEndPort        int
+	ClientIdentifier   string
 }
+
+type Listener struct {
+	NetListener net.Listener
+	Config      ListenerConfig
+}
+
+var listeners []Listener
+var server *tunnel.Server
+var client *tunnel.Client
 
 func main() {
 
@@ -68,7 +79,7 @@ func runClient(configFileName *string) {
 		ServerAddr: fmt.Sprintf("%s:%d", config.ServerHost, config.ServerTunnelControlPort),
 	}
 
-	client, err := tunnel.NewClient(tunnelClientConfig)
+	client, err = tunnel.NewClient(tunnelClientConfig)
 	if err != nil {
 		fmt.Printf("runClient(): can't create tunnel client because %s \n", err)
 		os.Exit(1)
@@ -91,7 +102,7 @@ func runServer(configFileName *string) {
 	tunnelServerConfig := &tunnel.ServerConfig{
 		DebugLog: config.DebugLog,
 	}
-	server, err := tunnel.NewServer(tunnelServerConfig)
+	server, err = tunnel.NewServer(tunnelServerConfig)
 	if err != nil {
 		fmt.Printf("runServer(): can't create tunnel server because %s \n", err)
 		os.Exit(1)
@@ -105,8 +116,58 @@ func runServer(configFileName *string) {
 	http.ListenAndServe(fmt.Sprintf(":%d", config.TunnelControlPort), server)
 }
 
-func setListeners(listenerConfigs []ListenerConfig) {
+func setListeners(listenerConfigs []ListenerConfig) error {
+	currentListenersThatCanKeepRunning := make([]Listener, 0)
+	newListenersThatHaveToBeAdded := make([]Listener, 0)
 
+	for _, existingListener := range listeners {
+		canKeepRunning := false
+		for _, newListenerConfig := range listenerConfigs {
+			if compareListenerConfigs(existingListener.Config, newListenerConfig) {
+				canKeepRunning = true
+			}
+		}
+
+		if !canKeepRunning {
+			server.DeleteAddr(existingListener.NetListener, nil)
+			err := existingListener.NetListener.Close()
+			if err != nil {
+				return err
+			}
+		} else {
+			currentListenersThatCanKeepRunning = append(currentListenersThatCanKeepRunning, existingListener)
+		}
+	}
+
+	for _, newListenerConfig := range listenerConfigs {
+		hasToBeAdded := true
+		for _, existingListener := range listeners {
+			if compareListenerConfigs(existingListener.Config, newListenerConfig) {
+				hasToBeAdded = false
+			}
+		}
+
+		if hasToBeAdded {
+			netListener, err := net.Listen("tcp", fmt.Sprintf(":%d", newListenerConfig.FrontEndListenPort))
+			if err != nil {
+				return err
+			}
+			server.AddAddr(netListener, nil, newListenerConfig.ClientIdentifier, newListenerConfig.ProxyProtocol, newListenerConfig.BackEndPort)
+			newListenersThatHaveToBeAdded = append(newListenersThatHaveToBeAdded, Listener{NetListener: netListener, Config: newListenerConfig})
+		}
+	}
+
+	listeners = append(currentListenersThatCanKeepRunning, newListenersThatHaveToBeAdded...)
+
+	return nil
+
+}
+
+func compareListenerConfigs(a, b ListenerConfig) bool {
+	return (a.BackEndPort == b.BackEndPort &&
+		a.ClientIdentifier == b.ClientIdentifier &&
+		a.FrontEndListenPort == b.FrontEndListenPort &&
+		a.ProxyProtocol == b.ProxyProtocol)
 }
 
 type ManagementHttpHandler struct{}
