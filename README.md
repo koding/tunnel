@@ -19,6 +19,7 @@ It is intended to be used to make it easier for non-tech-savvy people to host we
 
 I have a few requirements for this system. 
 
+1. It should be 100% automatable. It is intended to be used in a situation where it is unreasonable to ask the user to configure thier router, for example, they don't know how, they don't want to, or they are not allowed to (For example they live in a dorm where the University manages the network).
 1. Users have control over their own data.  We do not entrust cloud providers or 3rd parties with our data, TLS keys/certificates, etc. In terms of every day usage, this is a TLS connection from an internet user directly to the self-hoster's computer. It is opaque to the cloud provider. 
 1. It should support Failover/High Avaliability of services.  Therefore, it needs to be able to have multiple tunnel clients connected at once, which can be hot-swapped via a Management API.
 
