@@ -1,0 +1,12 @@
+git.sequentialread.com/forest/tunnel v0.0.0-20170601195443-35a8b95662bf h1:2flo/nnhfe3sSxQ/MHlK7KoY54tQ1pAvMzkh0ZOxyH4=
+git.sequentialread.com/forest/tunnel v0.0.0-20170601195443-35a8b95662bf/go.mod h1:i+PvDDsWjggoCQOO8bGJJKRB9qfxmHk5yzIEA/h8dzg=
+github.com/cenkalti/backoff v2.1.0+incompatible h1:FIRvWBZrzS4YC7NT5cOuZjexzFvIr+Dbi6aD1cZaNBk=
+github.com/cenkalti/backoff v2.1.0+incompatible/go.mod h1:90ReRw6GdpyfrHakVjL/QHaoyV4aDUVVkXQJJJ3NXXM=
+github.com/gorilla/websocket v1.4.0 h1:WDFjx/TMzVgy9VdMMQi2K2Emtwi2QcUQsztZ/zLaH/Q=
+github.com/gorilla/websocket v1.4.0/go.mod h1:E7qHFY5m1UJ88s3WnNqhKjPHQ0heANvMoAMk2YaljkQ=
+github.com/hashicorp/yamux v0.0.0-20181012175058-2f1d1f20f75d h1:kJCB4vdITiW1eC1vq2e6IsrXKrZit1bv/TDYFGMp4BQ=
+github.com/hashicorp/yamux v0.0.0-20181012175058-2f1d1f20f75d/go.mod h1:+NfK9FKeTrX5uv1uIXGdwYDTeHna2qgaIlx54MXqjAM=
+github.com/koding/logging v0.0.0-20160720134017-8b5a689ed69b h1:Ix1hwcOtW6e0KG1+Fn1blMih1O4td/fa9Q2Br0/zPBo=
+github.com/koding/logging v0.0.0-20160720134017-8b5a689ed69b/go.mod h1:km9Clt+22fAbEvoPJSRufXDN110ZA6xLNU7oe4dwRHk=
+github.com/sequentialread/tunnel v0.0.0-20180106222644-1aa00130f089 h1:VaTFPNjpTnWarvouCa3V7OLAiYCcDYJBFskZrxegZR8=
+github.com/sequentialread/tunnel v0.0.0-20180106222644-1aa00130f089/go.mod h1:8YidaOrsBiSMwBD7xC3o4mzj+paoU2W3Dl/Yxftj5Uk=
