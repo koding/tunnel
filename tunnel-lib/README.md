@@ -1,4 +1,4 @@
-# Tunnel [![GoDoc](http://img.shields.io/badge/go-documentation-blue.svg?style=flat-square)](http://godoc.org/github.com/koding/tunnel) [![Go Report Card](https://goreportcard.com/badge/github.com/koding/tunnel)](https://goreportcard.com/report/github.com/koding/tunnel) [![Build Status](http://img.shields.io/travis/koding/tunnel.svg?style=flat-square)](https://travis-ci.org/koding/tunnel)
+# Tunnel [![GoDoc](http://img.shields.io/badge/go-documentation-blue.svg?style=flat-square)](http://godoc.org/git.sequentialread.com/forest/tunnel) [![Go Report Card](https://goreportcard.com/badge/git.sequentialread.com/forest/tunnel)](https://goreportcard.com/report/git.sequentialread.com/forest/tunnel) [![Build Status](http://img.shields.io/travis/koding/tunnel.svg?style=flat-square)](https://travis-ci.org/koding/tunnel)
 
 Tunnel is a server/client package that enables to proxy public connections to
 your local machine over a tunnel connection from the local machine to the
@@ -28,7 +28,7 @@ package main
 import (
 	"net/http"
 
-	"github.com/koding/tunnel"
+	"git.sequentialread.com/forest/tunnel"
 )
 
 func main() {
@@ -48,7 +48,7 @@ Let us now create the client side part:
 ```go
 package main
 
-import "github.com/koding/tunnel"
+import "git.sequentialread.com/forest/tunnel"
 
 func main() {
 	cfg := &tunnel.ClientConfig{
@@ -77,7 +77,7 @@ That's it.
 
 There are many options that can be changed, such as a static local address for
 your client. Have alook at the
-[documentation](http://godoc.org/github.com/koding/tunnel)
+[documentation](http://godoc.org/git.sequentialread.com/forest/tunnel)
 
 
 # Protocol
