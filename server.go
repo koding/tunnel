@@ -71,8 +71,6 @@ type Server struct {
 	// yamuxConfig is passed to new yamux.Session's
 	yamuxConfig *yamux.Config
 
-	sendProxyProtocolv1 bool
-
 	log logging.Logger
 }
 
@@ -88,9 +86,6 @@ type ServerConfig struct {
 
 	// Debug enables debug mode, enable only if you want to debug the server
 	Debug bool
-
-	//Send the HAProxy PROXY protocol v1 header to the proxy client before streaming TCP from the remote client.
-	SendProxyProtocolv1 bool
 
 	// Log defines the logger. If nil a default logging.Logger is used.
 	Log logging.Logger
@@ -135,7 +130,6 @@ func NewServer(cfg *ServerConfig) (*Server, error) {
 		yamuxConfig:           yamuxConfig,
 		connCh:                connCh,
 		log:                   log,
-		sendProxyProtocolv1:   cfg.SendProxyProtocolv1,
 	}
 
 	go s.serveTCP()
@@ -172,7 +166,7 @@ func (s *Server) serveTCPConn(conn net.Conn) {
 }
 
 func (s *Server) handleTCPConn(conn net.Conn) error {
-	ident, ok := s.virtualAddrs.getIdent(conn)
+	listenerInfo, ok := s.virtualAddrs.getListenerInfo(conn)
 	if !ok {
 		return fmt.Errorf("no virtual address available for %s", conn.LocalAddr())
 	}
@@ -182,12 +176,16 @@ func (s *Server) handleTCPConn(conn net.Conn) error {
 		return err
 	}
 
-	stream, err := s.dial(ident, proto.TCP, port)
+	backendPortToDial := port
+	if listenerInfo.BackendPort != -1 && listenerInfo.BackendPort != 0 {
+		backendPortToDial = listenerInfo.BackendPort
+	}
+	stream, err := s.dial(listenerInfo.AssociatedClientIdentity, proto.TCP, backendPortToDial)
 	if err != nil {
 		return err
 	}
 
-	if s.sendProxyProtocolv1 {
+	if listenerInfo.SendProxyProtocolv1 {
 		remoteHost, remotePort, err := net.SplitHostPort(conn.RemoteAddr().String())
 		if err != nil {
 			return err
@@ -480,8 +478,8 @@ func (s *Server) changeState(identifier string, state ClientState, err error) (p
 //
 // If l listens on multiple interfaces it's desirable to call AddAddr multiple
 // times with the same l value but different ip one.
-func (s *Server) AddAddr(l net.Listener, ip net.IP, identifier string) {
-	s.virtualAddrs.Add(l, ip, identifier)
+func (s *Server) AddAddr(l net.Listener, ip net.IP, identifier string, sendProxyProtocolv1 bool, backendPort int) {
+	s.virtualAddrs.Add(l, ip, identifier, sendProxyProtocolv1, backendPort)
 }
 
 // DeleteAddr stops listening for connections on the given listener.

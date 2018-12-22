@@ -60,7 +60,8 @@ func (p *TCPProxy) Proxy(remote net.Conn, msg *proto.ControlMessage) {
 		localAddr = l
 	}
 
-	log.Debug("Dialing local server: %q", localAddr)
+	//log.Debug("Dialing local server: %q", localAddr)
+	//fmt.Printf("Dialing local server: %q\n\n", localAddr)
 	local, err := net.DialTimeout("tcp", localAddr, defaultTimeout)
 	if err != nil {
 		log.Error("Dialing local server %q failed: %s", localAddr, err)

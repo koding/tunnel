@@ -288,39 +288,6 @@ func (tt *TunnelTest) serveSingle(ident string, t *Tunnel) (bool, error) {
 	//   - register tunnel on tunnel.Server
 	//
 	switch t.Type {
-	case TypeHTTP:
-		// TODO(rjeczalik): refactor to separate method
-
-		h, ok := t.Handler.(http.Handler)
-		if !ok {
-			h, ok = t.Handler.(http.HandlerFunc)
-			if !ok {
-				fn, ok := t.Handler.(func(http.ResponseWriter, *http.Request))
-				if !ok {
-					return false, fmt.Errorf("invalid handler type for %q tunnel: %T", ident, t.Handler)
-				}
-
-				h = http.HandlerFunc(fn)
-			}
-
-		}
-
-		logf("serving on local %s for HTTP tunnel %q", l.Addr(), ident)
-
-		go (&http.Server{Handler: h}).Serve(l)
-
-		tt.Server.AddHost(localAddr, ident)
-
-		tt.mu.Lock()
-		tt.Listeners[ident] = [2]net.Listener{l, nil}
-		tt.mu.Unlock()
-
-		if err := tt.addClient(ident, cfg); err != nil {
-			return false, fmt.Errorf("error creating client for %q tunnel: %s", ident, err)
-		}
-
-		logf("registered HTTP tunnel: host=%s, ident=%s", localAddr, ident)
-
 	case TypeTCP:
 		// TODO(rjeczalik): refactor to separate method
 

@@ -9,8 +9,18 @@ import (
 	"github.com/koding/logging"
 )
 
+type ListenerInfo struct {
+	//Send the HAProxy PROXY protocol v1 header to the proxy client before streaming TCP from the remote client.
+	SendProxyProtocolv1 bool
+
+	BackendPort              int
+	AssociatedClientIdentity string
+}
+
 type listener struct {
 	net.Listener
+	ListenerInfo
+
 	*vaddrOptions
 
 	done int32
@@ -18,7 +28,7 @@ type listener struct {
 	// ips keeps track of registered clients for ip-based routing;
 	// when last client is deleted from the ip routing map, we stop
 	// listening on connections
-	ips map[string]struct{}
+	//ips map[string]struct{}
 }
 
 type vaddrOptions struct {
@@ -30,8 +40,8 @@ type vaddrStorage struct {
 	*vaddrOptions
 
 	listeners map[net.Listener]*listener
-	ports     map[int]string    // port-based routing: maps port number to identifier
-	ips       map[string]string // ip-based routing: maps ip address to identifier
+	ports     map[int]*listener // port-based routing: maps port number to identifier
+	//	ips       map[string]*listener // ip-based routing: maps ip address to identifier
 
 	mu sync.RWMutex
 }
@@ -40,8 +50,8 @@ func newVirtualAddrs(opts *vaddrOptions) *vaddrStorage {
 	return &vaddrStorage{
 		vaddrOptions: opts,
 		listeners:    make(map[net.Listener]*listener),
-		ports:        make(map[int]string),
-		ips:          make(map[string]string),
+		ports:        make(map[int]*listener),
+		//		ips:          make(map[string]*listener),
 	}
 }
 
@@ -89,23 +99,24 @@ func (l *listener) stop() {
 	}
 }
 
-func (vaddr *vaddrStorage) Add(l net.Listener, ip net.IP, ident string) {
+func (vaddr *vaddrStorage) Add(l net.Listener, ip net.IP, ident string, sendProxyProtocolv1 bool, backendPort int) {
 	vaddr.mu.Lock()
 	defer vaddr.mu.Unlock()
 
 	lis, ok := vaddr.listeners[l]
 	if !ok {
-		lis = vaddr.newListener(l)
+		lis = vaddr.newListener(l, ident, sendProxyProtocolv1, backendPort)
 		vaddr.listeners[l] = lis
 		go lis.serve()
 	}
 
-	if ip != nil {
-		lis.ips[ip.String()] = struct{}{}
-		vaddr.ips[ip.String()] = ident
-	} else {
-		vaddr.ports[mustPort(l)] = ident
-	}
+	vaddr.ports[mustPort(l)] = lis
+	// if ip != nil {
+	// 	lis.ips[ip.String()] = struct{}{}
+	// 	vaddr.ips[ip.String()] = ident
+	// } else {
+	// 	vaddr.ports[mustPort(l)] = ident
+	// }
 }
 
 func (vaddr *vaddrStorage) Delete(l net.Listener, ip net.IP) {
@@ -117,67 +128,79 @@ func (vaddr *vaddrStorage) Delete(l net.Listener, ip net.IP) {
 		return
 	}
 
-	var stop bool
+	lis.stop()
+	delete(vaddr.ports, mustPort(l))
+	delete(vaddr.listeners, l)
 
-	if ip != nil {
-		delete(lis.ips, ip.String())
-		delete(vaddr.ips, ip.String())
+	// var stop bool
 
-		stop = len(lis.ips) == 0
-	} else {
-		delete(vaddr.ports, mustPort(l))
+	// if ip != nil {
+	// 	delete(lis.ips, ip.String())
+	// 	delete(vaddr.ips, ip.String())
 
-		stop = true
-	}
+	// 	stop = len(lis.ips) == 0
+	// } else {
+	// 	delete(vaddr.ports, mustPort(l))
 
-	// Only stop listening for connections when listener has clients
-	// registered to tunnel the connections to.
-	if stop {
-		lis.stop()
-		delete(vaddr.listeners, l)
-	}
+	// 	stop = true
+	// }
+
+	// // Only stop listening for connections when listener has clients
+	// // registered to tunnel the connections to.
+	// if stop {
+	// 	lis.stop()
+	// 	delete(vaddr.listeners, l)
+	// }
 }
 
-func (vaddr *vaddrStorage) newListener(l net.Listener) *listener {
+func (vaddr *vaddrStorage) newListener(l net.Listener, clientIdentity string, sendProxyProtocolv1 bool, backendPort int) *listener {
 	return &listener{
-		Listener:     l,
+		Listener: l,
+		ListenerInfo: ListenerInfo{
+			AssociatedClientIdentity: clientIdentity,
+			SendProxyProtocolv1:      sendProxyProtocolv1,
+			BackendPort:              backendPort,
+		},
 		vaddrOptions: vaddr.vaddrOptions,
-		ips:          make(map[string]struct{}),
+		//ips:          make(map[string]struct{}),
 	}
 }
 
 func (vaddr *vaddrStorage) HasIdentifier(identifier string) bool {
-	for _, id := range vaddr.ports {
-		if id == identifier {
+	for _, listener := range vaddr.ports {
+		if listener.AssociatedClientIdentity == identifier {
 			return true
 		}
 	}
-	for _, id := range vaddr.ips {
-		if id == identifier {
-			return true
-		}
-	}
+	// for _, id := range vaddr.ips {
+	// 	if id == identifier {
+	// 		return true
+	// 	}
+	// }
 	return false
 }
 
-func (vaddr *vaddrStorage) getIdent(conn net.Conn) (string, bool) {
+func (vaddr *vaddrStorage) getListenerInfo(conn net.Conn) (*ListenerInfo, bool) {
 	vaddr.mu.Lock()
 	defer vaddr.mu.Unlock()
 
-	ip, port, err := parseHostPort(conn.LocalAddr().String())
+	_, port, err := parseHostPort(conn.LocalAddr().String())
 	if err != nil {
 		vaddr.log.Debug("failed to get identifier for connection %q: %s", conn.LocalAddr(), err)
-		return "", false
+		return nil, false
 	}
 
 	// First lookup if there's a ip-based route, then try port-base one.
+	// if ident, ok := vaddr.ips[ip]; ok {
+	// 	return ident, true
+	// }
 
-	if ident, ok := vaddr.ips[ip]; ok {
-		return ident, true
+	listener, ok := vaddr.ports[port]
+	var listenerInfo *ListenerInfo
+	if ok {
+		listenerInfo = &(listener.ListenerInfo)
 	}
-
-	ident, ok := vaddr.ports[port]
-	return ident, ok
+	return listenerInfo, ok
 }
 
 func mustPort(l net.Listener) int {
