@@ -30,10 +30,10 @@ type ClientConfig struct {
 }
 
 type ListenerConfig struct {
-	ProxyProtocol      bool
-	FrontEndListenPort int
-	BackEndPort        int
-	ClientIdentifier   string
+	HaProxyProxyProtocol bool
+	FrontEndListenPort   int
+	BackEndPort          int
+	ClientIdentifier     string
 }
 
 type Listener struct {
@@ -209,7 +209,7 @@ func setListeners(listenerConfigs []ListenerConfig) (int, string) {
 					return http.StatusInternalServerError, "Unknown Listening Error"
 				}
 			}
-			server.AddAddr(netListener, nil, newListenerConfig.ClientIdentifier, newListenerConfig.ProxyProtocol, newListenerConfig.BackEndPort)
+			server.AddAddr(netListener, nil, newListenerConfig.ClientIdentifier, newListenerConfig.HaProxyProxyProtocol, newListenerConfig.BackEndPort)
 			newListenersThatHaveToBeAdded = append(newListenersThatHaveToBeAdded, Listener{NetListener: netListener, Config: newListenerConfig})
 		}
 	}
@@ -224,7 +224,7 @@ func compareListenerConfigs(a, b ListenerConfig) bool {
 	return (a.BackEndPort == b.BackEndPort &&
 		a.ClientIdentifier == b.ClientIdentifier &&
 		a.FrontEndListenPort == b.FrontEndListenPort &&
-		a.ProxyProtocol == b.ProxyProtocol)
+		a.HaProxyProxyProtocol == b.HaProxyProxyProtocol)
 }
 
 type ManagementHttpHandler struct{}

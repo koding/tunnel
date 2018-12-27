@@ -36,7 +36,7 @@ HTTP GET localhost:9057/clients:
 
 Sending the tunnel configuration to the server.
 HTTP PUT localhost:9057/tunnels:
-[{"ProxyProtocol":true,"FrontEndListenPort":9000,"BackEndPort":9001,"ClientIdentifier":"TestClient1"}]
+[{"HaProxyProxyProtocol":true,"FrontEndListenPort":9000,"BackEndPort":9001,"ClientIdentifier":"TestClient1"}]
 
 Starting the "sender" test app. 
 It connects to the front end port of the tunnel (port 9000).  This would be your end user who wants to use the web application.
