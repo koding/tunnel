@@ -31,8 +31,9 @@ CLIENT_PID=$!
 sleep 1
 
 
-# Post the tunnels config to the management port of the tunnel server
-# this would be done by the automation tool
+# Check the list of connected clients
+# this would be done by the automation tool to validate that the subsequent request should succeed
+# instead of getting "404 Client TestClient1 is not connected"
 echo "Connected Clients:"
 curl -s localhost:9057/clients 2>&1 >> test.log 
 echo ""
