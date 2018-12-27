@@ -28,7 +28,7 @@ Starting the tunnel server with tunnel mux port: 9056, management port: 9057
 Starting the "listener" test app. It listens on port 9001.  This would be your web  application server.
 
 Listener: I am listening on port 9001
-Starting the  the client.  Client Identifier: TestClient1
+Starting the tunnel client.  Client Identifier: TestClient1
 
 Checking the list of connected clients.
 HTTP GET localhost:9057/clients:

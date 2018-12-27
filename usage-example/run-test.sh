@@ -24,7 +24,7 @@ LISTENER_PID=$!
 sleep 1
 
 
-echo "Starting the  the client.  Client Identifier: TestClient1"
+echo "Starting the tunnel client.  Client Identifier: TestClient1"
 echo ""
 ./tunnel -mode client -configFile client-config.json 2>&1 >> test.log &
 CLIENT_PID=$!
