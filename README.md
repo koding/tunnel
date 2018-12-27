@@ -19,6 +19,47 @@ See the usage example folder for a basic test.
 1. The tunnel client connects to the tunnel server on the Tunnel Control Port. This connection will use TLS Client Authentication. This connection will be held open and re-created if dropped.
 1. An internet user connects to the tunnel server on one of the ports defined in the JSON. The internet user's request is tunneled through the original connection from the tunnel client, and then proxied to the web server software running on the self-hoster's server computer.
 
+
+### Output from Usage example showing how it works:
+
+```
+Starting the tunnel server with tunnel mux port: 9056, management port: 9057 
+
+Starting the "listener" test app. It listens on port 9001.  This would be your web  application server.
+
+Listener: I am listening on port 9001
+Starting the  the client.  Client Identifier: TestClient1
+
+Checking the list of connected clients.
+HTTP GET localhost:9057/clients:
+{"TestClient1":{"CurrentState":"ClientConnected","LastState":"ClientUnknown"}}
+
+Sending the tunnel configuration to the server.
+HTTP PUT localhost:9057/tunnels:
+[{"ProxyProtocol":true,"FrontEndListenPort":9000,"BackEndPort":9001,"ClientIdentifier":"TestClient1"}]
+
+Starting the "sender" test app. 
+It connects to the front end port of the tunnel (port 9000).  This would be your end user who wants to use the web application.
+
+Sender: I am dialing localhost:9000
+Sender: sent 16 bytes
+Listener: Someone connected from: 127.0.0.1:45516
+Listener: read 16 bytes
+Listener: the sender sent: Hello ! Hello! 
+
+Listener: I am going to respond with "asd"
+Listener: conn.Close()
+Sender: read 3 bytes
+Sender: Response from listener was: asd
+Done. Now terminating forked processes and cleaning up.. 
+./run-test.sh: line 70: 23044 Terminated              tail -f test.log
+./run-test.sh: line 70: 23205 Terminated              ./tunnel -mode server -configFile server-config.json 2>&1 >> test.log
+./run-test.sh: line 70: 23206 Terminated              ./listener 2>&1 >> test.log
+./run-test.sh: line 70: 23218 Terminated              ./tunnel -mode client -configFile client-config.json 2>&1 >> test.log
+
+```
+
+
 ### Why did you set it up this way?
 
 I have a few requirements for this system. 

@@ -9,22 +9,23 @@ go build -o ./tunnel ../main.go
 go build -o ./sender sender.go
 go build -o ./listener listener.go
 
-# Start the server
-# tunnel mux port: 9056
-# management port: 9057
+echo "Starting the tunnel server with tunnel mux port: 9056, management port: 9057 "
+echo ""
+
 ./tunnel -mode server -configFile server-config.json 2>&1  >> test.log  &
 SERVER_PID=$!
 
-# Start the "listener" test app 
-# It listens on port 9001.  This would be your web  application server.
+echo "Starting the \"listener\" test app. It listens on port 9001.  This would be your web  application server."
+echo ""
+
 ./listener  2>&1 >> test.log &
 LISTENER_PID=$!
 
 sleep 1
 
 
-# Start the client 
-# Client Identifier: TestClient1
+echo "Starting the  the client.  Client Identifier: TestClient1"
+echo ""
 ./tunnel -mode client -configFile client-config.json 2>&1 >> test.log &
 CLIENT_PID=$!
 
@@ -34,30 +35,32 @@ sleep 1
 # Check the list of connected clients
 # this would be done by the automation tool to validate that the subsequent request should succeed
 # instead of getting "404 Client TestClient1 is not connected"
-echo "Connected Clients:"
+echo "Checking the list of connected clients."
+echo "HTTP GET localhost:9057/clients:"
 curl -s localhost:9057/clients 2>&1 >> test.log 
 echo ""
 echo ""
 
 # Post the tunnels config to the management port of the tunnel server
 # this would be done by the automation tool
-echo "tunnel configuration:"
+echo "Sending the tunnel configuration to the server."
+echo "HTTP PUT localhost:9057/tunnels:"
 curl -s -X PUT -H "Content-Type: application/json" -d @tunnels.json localhost:9057/tunnels 2>&1 >> test.log 
 echo ""
 echo ""
 
 sleep 1
 
-# Start the "sender" test app 
-# It connects to the front end port of the tunnel (port 9000).  This would be your end user who wants to use the web application.
+echo "Starting the \"sender\" test app. "
+echo "It connects to the front end port of the tunnel (port 9000).  This would be your end user who wants to use the web application."
+echo ""
+
 ./sender 2>&1  >> test.log  &
 SENDER_PID=$!
 
 sleep 1
 
-echo "Wait 3 seconds then exit. "  >> test.log
-
-sleep 3
+echo "Done. Now terminating forked processes and cleaning up.. "  >> test.log
 
 kill -TERM $SERVER_PID
 kill -TERM $CLIENT_PID
