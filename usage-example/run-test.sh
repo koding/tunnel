@@ -22,17 +22,28 @@ LISTENER_PID=$!
 
 sleep 1
 
+
+# Start the client 
+# Client Identifier: TestClient1
+./tunnel -mode client -configFile client-config.json 2>&1 >> test.log &
+CLIENT_PID=$!
+
+sleep 1
+
+
+# Post the tunnels config to the management port of the tunnel server
+# this would be done by the automation tool
+echo "Connected Clients:"
+curl -s localhost:9057/clients 2>&1 >> test.log 
+echo ""
+echo ""
+
 # Post the tunnels config to the management port of the tunnel server
 # this would be done by the automation tool
 echo "tunnel configuration:"
 curl -s -X PUT -H "Content-Type: application/json" -d @tunnels.json localhost:9057/tunnels 2>&1 >> test.log 
 echo ""
 echo ""
-
-# Start the client 
-# Client Identifier: TestClient1
-./tunnel -mode client -configFile client-config.json 2>&1 >> test.log &
-CLIENT_PID=$!
 
 sleep 1
 

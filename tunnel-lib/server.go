@@ -276,7 +276,9 @@ func (s *Server) controlHandler(w http.ResponseWriter, r *http.Request) (ctErr e
 	identifier := r.Header.Get(proto.ClientIdentifierHeader)
 	ok := s.hasIdentifier(identifier)
 	if !ok {
-		return fmt.Errorf("no host associated for identifier %s. please use server.AddAddr()", identifier)
+		// We will allow clients to connect even if they are not configured to be used yet.
+		// In this case they have an empty set of listening front-end ports.
+		//return fmt.Errorf("no host associated for identifier %s. please use server.AddAddr()", identifier)
 	}
 
 	ct, ok := s.getControl(identifier)

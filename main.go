@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"strings"
+	"sync"
 
 	tunnel "git.sequentialread.com/forest/tunnel/tunnel-lib"
 )
@@ -39,8 +41,18 @@ type Listener struct {
 	Config      ListenerConfig
 }
 
+type ClientState struct {
+	CurrentState string
+	LastState    string
+}
+
+// Server State
 var listeners []Listener
+var clientStatesMutex = &sync.Mutex{}
+var clientStates map[string]ClientState
 var server *tunnel.Server
+
+// Client State
 var client *tunnel.Client
 
 func main() {
@@ -99,14 +111,42 @@ func runServer(configFileName *string) {
 		os.Exit(1)
 	}
 
+	clientStateChangeChannel := make(chan *tunnel.ClientStateChange)
+
 	tunnelServerConfig := &tunnel.ServerConfig{
-		DebugLog: config.DebugLog,
+		StateChanges: clientStateChangeChannel,
+		DebugLog:     config.DebugLog,
 	}
 	server, err = tunnel.NewServer(tunnelServerConfig)
 	if err != nil {
 		fmt.Printf("runServer(): can't create tunnel server because %s \n", err)
 		os.Exit(1)
 	}
+
+	clientStates = make(map[string]ClientState)
+	go (func() {
+		for {
+			clientStateChange := <-clientStateChangeChannel
+			clientStatesMutex.Lock()
+			previousState := ""
+			currentState := clientStateChange.Current.String()
+			fromMap, wasInMap := clientStates[clientStateChange.Identifier]
+			if wasInMap {
+				previousState = fromMap.CurrentState
+			} else {
+				previousState = clientStateChange.Previous.String()
+			}
+			if clientStateChange.Error != nil {
+				fmt.Printf("runServer(): recieved a client state change with an error: %s \n", err)
+				currentState = "ClientError"
+			}
+			clientStates[clientStateChange.Identifier] = ClientState{
+				CurrentState: currentState,
+				LastState:    previousState,
+			}
+			clientStatesMutex.Unlock()
+		}
+	})()
 
 	go (func() {
 		http.ListenAndServe(fmt.Sprintf(":%d", config.ManagementPort), &(ManagementHttpHandler{}))
@@ -116,9 +156,19 @@ func runServer(configFileName *string) {
 	http.ListenAndServe(fmt.Sprintf(":%d", config.TunnelControlPort), server)
 }
 
-func setListeners(listenerConfigs []ListenerConfig) error {
+func setListeners(listenerConfigs []ListenerConfig) (int, string) {
 	currentListenersThatCanKeepRunning := make([]Listener, 0)
 	newListenersThatHaveToBeAdded := make([]Listener, 0)
+
+	for _, newListenerConfig := range listenerConfigs {
+		clientState, everHeardOfClientBefore := clientStates[newListenerConfig.ClientIdentifier]
+		if !everHeardOfClientBefore {
+			return http.StatusNotFound, fmt.Sprintf("Client %s Not Found", newListenerConfig.ClientIdentifier)
+		}
+		if clientState.CurrentState != tunnel.ClientConnected.String() {
+			return http.StatusNotFound, fmt.Sprintf("Client %s is not connected it is %s", newListenerConfig.ClientIdentifier, clientState.CurrentState)
+		}
+	}
 
 	for _, existingListener := range listeners {
 		canKeepRunning := false
@@ -130,10 +180,11 @@ func setListeners(listenerConfigs []ListenerConfig) error {
 
 		if !canKeepRunning {
 			server.DeleteAddr(existingListener.NetListener, nil)
-			err := existingListener.NetListener.Close()
-			if err != nil {
-				return err
-			}
+
+			// Do I care if this returned an error? No, I do not. See:
+			// https://github.com/golang/go/blob/master/src/net/net.go#L197
+			existingListener.NetListener.Close()
+
 		} else {
 			currentListenersThatCanKeepRunning = append(currentListenersThatCanKeepRunning, existingListener)
 		}
@@ -148,9 +199,15 @@ func setListeners(listenerConfigs []ListenerConfig) error {
 		}
 
 		if hasToBeAdded {
-			netListener, err := net.Listen("tcp", fmt.Sprintf(":%d", newListenerConfig.FrontEndListenPort))
+			listenAddress := fmt.Sprintf(":%d", newListenerConfig.FrontEndListenPort)
+			netListener, err := net.Listen("tcp", listenAddress)
 			if err != nil {
-				return err
+				if strings.Contains(err.Error(), "already in use") {
+					return http.StatusConflict, fmt.Sprintf("Port Conflict Port %s already in use", listenAddress)
+				} else {
+					fmt.Printf("setListeners(): can't net.Listen(\"tcp\", \"%s\")  because %s \n", listenAddress, err)
+					return http.StatusInternalServerError, "Unknown Listening Error"
+				}
 			}
 			server.AddAddr(netListener, nil, newListenerConfig.ClientIdentifier, newListenerConfig.ProxyProtocol, newListenerConfig.BackEndPort)
 			newListenersThatHaveToBeAdded = append(newListenersThatHaveToBeAdded, Listener{NetListener: netListener, Config: newListenerConfig})
@@ -159,7 +216,7 @@ func setListeners(listenerConfigs []ListenerConfig) error {
 
 	listeners = append(currentListenersThatCanKeepRunning, newListenersThatHaveToBeAdded...)
 
-	return nil
+	return http.StatusOK, "ok"
 
 }
 
@@ -175,6 +232,22 @@ type ManagementHttpHandler struct{}
 func (s *ManagementHttpHandler) ServeHTTP(responseWriter http.ResponseWriter, request *http.Request) {
 
 	switch fmt.Sprintf("%s/", path.Clean(request.URL.Path)) {
+	case "/clients/":
+		if request.Method == "GET" {
+			clientStatesMutex.Lock()
+			bytes, err := json.Marshal(clientStates)
+			clientStatesMutex.Unlock()
+			if err != nil {
+				http.Error(responseWriter, "500 JSON Marshal Error", http.StatusInternalServerError)
+				return
+			}
+			responseWriter.Header().Set("Content-Type", "application/json")
+			responseWriter.Write(bytes)
+
+		} else {
+			responseWriter.Header().Set("Allow", "PUT")
+			http.Error(responseWriter, "405 Method Not Allowed", http.StatusMethodNotAllowed)
+		}
 	case "/tunnels/":
 		if request.Method == "PUT" {
 			if request.Header.Get("Content-Type") != "application/json" {
@@ -192,11 +265,16 @@ func (s *ManagementHttpHandler) ServeHTTP(responseWriter http.ResponseWriter, re
 					return
 				}
 
-				setListeners(listenerConfigs)
+				statusCode, errorMessage := setListeners(listenerConfigs)
+
+				if statusCode != 200 {
+					http.Error(responseWriter, errorMessage, statusCode)
+					return
+				}
 
 				bytes, err := json.Marshal(listenerConfigs)
 				if err != nil {
-					http.Error(responseWriter, "500 Marshal Error", http.StatusInternalServerError)
+					http.Error(responseWriter, "500 JSON Marshal Error", http.StatusInternalServerError)
 					return
 				}
 

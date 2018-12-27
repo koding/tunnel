@@ -34,7 +34,3 @@ I have a few requirements for this system.
 1. Added support for HAProxy "PROXY" protocol. 
 1. Added support for Port mappings between front end and back end.
 1. Fixed various bugs related to connection lifecycle.
-
-### Issues
-
-Unfortunately right now the tunnels config has to put set 1st before the client can connect. I'll probably fix this later.
