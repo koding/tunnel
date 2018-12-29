@@ -32,12 +32,16 @@ CLIENT_PID=$!
 sleep 1
 
 
+
 # Check the list of connected clients
 # this would be done by the automation tool to validate that the subsequent request should succeed
 # instead of getting "404 Client TestClient1 is not connected"
 echo "Checking the list of connected clients."
 echo "HTTP GET localhost:9057/clients:"
-curl -s localhost:9057/clients 2>&1 >> test.log 
+curl --cacert "InternalCA+chain.crt" \
+  --key "TestClient1@example.com.key" \
+  --cert "TestClient1@example.com+chain.crt" \
+  -s https://localhost:9057/clients 2>&1 >> test.log 
 echo ""
 echo ""
 
@@ -45,7 +49,10 @@ echo ""
 # this would be done by the automation tool
 echo "Sending the tunnel configuration to the server."
 echo "HTTP PUT localhost:9057/tunnels:"
-curl -s -X PUT -H "Content-Type: application/json" -d @tunnels.json localhost:9057/tunnels 2>&1 >> test.log 
+curl --cacert "InternalCA+chain.crt" \
+  --key "TestClient1@example.com.key" \
+  --cert "TestClient1@example.com+chain.crt" \
+   -s -X PUT -H "Content-Type: application/json" -d @tunnels.json https://localhost:9057/tunnels 2>&1 >> test.log 
 echo ""
 echo ""
 

@@ -3,5 +3,9 @@
 	"ClientIdentifier": "TestClient1",
 	"ServerHost": "localhost",
 	"ServerTunnelControlPort": 9056,
-	"ServerManagementPort":  9057
+	"ServerManagementPort":  9057,
+    "UseTls": true,
+	"CaCertificateFile": "InternalCA+chain.crt",
+	"ClientTlsKeyFile": "TestClient1@example.com.key",
+	"ClientTlsCertificateFile": "TestClient1@example.com+chain.crt"
 }

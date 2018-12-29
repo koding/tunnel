@@ -1,10 +1,14 @@
 package main
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"io/ioutil"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -16,17 +20,25 @@ import (
 )
 
 type ServerConfig struct {
-	DebugLog          bool
-	TunnelControlPort int
-	ManagementPort    int
+	DebugLog                 bool
+	TunnelControlPort        int
+	ManagementPort           int
+	UseTls                   bool
+	CaCertificateFile        string
+	ServerTlsKeyFile         string
+	ServerTlsCertificateFile string
 }
 
 type ClientConfig struct {
-	DebugLog                bool
-	ClientIdentifier        string
-	ServerHost              string
-	ServerTunnelControlPort int
-	ServerManagementPort    int
+	DebugLog                 bool
+	ClientIdentifier         string
+	ServerHost               string
+	ServerTunnelControlPort  int
+	ServerManagementPort     int
+	UseTls                   bool
+	CaCertificateFile        string
+	ClientTlsKeyFile         string
+	ClientTlsCertificateFile string
 }
 
 type ListenerConfig struct {
@@ -81,23 +93,50 @@ func runClient(configFileName *string) {
 	var config ClientConfig
 	err := json.Unmarshal(configBytes, &config)
 	if err != nil {
-		fmt.Printf("runClient(): can't json.Unmarshal(configBytes, &config) because %s \n", err)
-		os.Exit(1)
+		log.Fatalf("runClient(): can't json.Unmarshal(configBytes, &config) because %s \n", err)
+	}
+
+	dialFunction := net.Dial
+
+	if config.UseTls {
+		cert, err := tls.LoadX509KeyPair(config.ClientTlsCertificateFile, config.ClientTlsKeyFile)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		caCert, err := ioutil.ReadFile(config.CaCertificateFile)
+		if err != nil {
+			log.Fatal(err)
+		}
+		caCertPool := x509.NewCertPool()
+		caCertPool.AppendCertsFromPEM(caCert)
+
+		tlsConfig := &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			RootCAs:      caCertPool,
+		}
+		tlsConfig.BuildNameToCertificate()
+
+		dialFunction = func(network, address string) (net.Conn, error) {
+			return tls.Dial(network, address, tlsConfig)
+		}
 	}
 
 	tunnelClientConfig := &tunnel.ClientConfig{
 		DebugLog:   config.DebugLog,
 		Identifier: config.ClientIdentifier,
 		ServerAddr: fmt.Sprintf("%s:%d", config.ServerHost, config.ServerTunnelControlPort),
+		Dial:       dialFunction,
 	}
 
 	client, err = tunnel.NewClient(tunnelClientConfig)
 	if err != nil {
-		fmt.Printf("runClient(): can't create tunnel client because %s \n", err)
-		os.Exit(1)
+		log.Fatalf("runClient(): can't create tunnel client because %s \n", err)
 	}
 
+	fmt.Print("runClient(): the client should be running now\n")
 	client.Start()
+
 }
 
 func runServer(configFileName *string) {
@@ -136,8 +175,8 @@ func runServer(configFileName *string) {
 			} else {
 				previousState = clientStateChange.Previous.String()
 			}
-			if clientStateChange.Error != nil {
-				fmt.Printf("runServer(): recieved a client state change with an error: %s \n", err)
+			if clientStateChange.Error != nil && clientStateChange.Error != io.EOF {
+				log.Printf("runServer(): recieved a client state change with an error: %s \n", clientStateChange.Error)
 				currentState = "ClientError"
 			}
 			clientStates[clientStateChange.Identifier] = ClientState{
@@ -148,12 +187,48 @@ func runServer(configFileName *string) {
 		}
 	})()
 
-	go (func() {
-		http.ListenAndServe(fmt.Sprintf(":%d", config.ManagementPort), &(ManagementHttpHandler{}))
-	})()
+	if config.UseTls {
+		caCert, err := ioutil.ReadFile(config.CaCertificateFile)
+		if err != nil {
+			log.Fatal(err)
+		}
+		caCertPool := x509.NewCertPool()
+		caCertPool.AppendCertsFromPEM(caCert)
 
-	//HTTP server for the control connection.
-	http.ListenAndServe(fmt.Sprintf(":%d", config.TunnelControlPort), server)
+		tlsConfig := &tls.Config{
+			ClientCAs:  caCertPool,
+			ClientAuth: tls.RequireAndVerifyClientCert,
+		}
+		tlsConfig.BuildNameToCertificate()
+
+		httpsManagementServer := &http.Server{
+			Addr:      fmt.Sprintf(":%d", config.ManagementPort),
+			TLSConfig: tlsConfig,
+			Handler:   &(ManagementHttpHandler{}),
+		}
+
+		go (func() {
+			httpsManagementServer.ListenAndServeTLS(config.ServerTlsCertificateFile, config.ServerTlsKeyFile)
+		})()
+
+		httpsTunnelServer := &http.Server{
+			Addr:      fmt.Sprintf(":%d", config.TunnelControlPort),
+			TLSConfig: tlsConfig,
+			Handler:   server,
+		}
+
+		log.Print("runServer(): the server should be running now\n")
+		httpsTunnelServer.ListenAndServeTLS(config.ServerTlsCertificateFile, config.ServerTlsKeyFile)
+
+	} else {
+		go (func() {
+			http.ListenAndServe(fmt.Sprintf(":%d", config.ManagementPort), &(ManagementHttpHandler{}))
+		})()
+
+		log.Print("runServer(): the server should be running now\n")
+		http.ListenAndServe(fmt.Sprintf(":%d", config.TunnelControlPort), server)
+	}
+
 }
 
 func setListeners(listenerConfigs []ListenerConfig) (int, string) {
@@ -205,7 +280,7 @@ func setListeners(listenerConfigs []ListenerConfig) (int, string) {
 				if strings.Contains(err.Error(), "already in use") {
 					return http.StatusConflict, fmt.Sprintf("Port Conflict Port %s already in use", listenAddress)
 				} else {
-					fmt.Printf("setListeners(): can't net.Listen(\"tcp\", \"%s\")  because %s \n", listenAddress, err)
+					log.Printf("setListeners(): can't net.Listen(\"tcp\", \"%s\")  because %s \n", listenAddress, err)
 					return http.StatusInternalServerError, "Unknown Listening Error"
 				}
 			}
@@ -287,7 +362,7 @@ func (s *ManagementHttpHandler) ServeHTTP(responseWriter http.ResponseWriter, re
 		}
 	case "/ping/":
 		if request.Method == "GET" {
-			fmt.Fprint(responseWriter, "pong!")
+			fmt.Fprint(responseWriter, "pong")
 		} else {
 			responseWriter.Header().Set("Allow", "GET")
 			http.Error(responseWriter, "405 method not allowed", http.StatusMethodNotAllowed)
@@ -301,12 +376,12 @@ func getConfigBytes(configFileName *string) []byte {
 	if configFileName != nil {
 		configBytes, err := ioutil.ReadFile(*configFileName)
 		if err != nil {
-			fmt.Printf("runClient(): can't ioutil.ReadFile(*configFileName) because %s \n", err)
+			log.Printf("getConfigBytes(): can't ioutil.ReadFile(*configFileName) because %s \n", err)
 			os.Exit(1)
 		}
 		return configBytes
 	} else {
-		fmt.Printf("runClient(): configFileName was nil.")
+		log.Printf("getConfigBytes(): configFileName was nil.")
 		os.Exit(1)
 		return nil
 	}

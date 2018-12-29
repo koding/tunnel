@@ -2,5 +2,9 @@
 {
     "DebugLog": false,
 	"TunnelControlPort": 9056,
-	"ManagementPort":  9057
+	"ManagementPort":  9057,
+    "UseTls": true,
+	"CaCertificateFile": "InternalCA+chain.crt",
+	"ServerTlsKeyFile": "localhost.key",
+	"ServerTlsCertificateFile": "localhost+chain.crt"
 }

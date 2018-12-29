@@ -15,8 +15,8 @@ See the usage example folder for a basic test.
 
 1. An automated tool creates a cloud instance and installs and configures the tunnel server on it. 
 1. An automated tool installs the tunnel client on the self-hoster's server computer. 
-1. An automated tool calls the `PUT /tunnels` api on the tunnel server's Management Port, and sends a JSON file describing which ports should be opened on the tunnel server, which client they should be tunneled to, and which ports on the client they should be tunneled to, as well as whether or not the HAProxy "PROXY" protocol should be used. This connection will also use TLS Client Authentication.
-1. The tunnel client connects to the tunnel server on the Tunnel Control Port. This connection will use TLS Client Authentication. This connection will be held open and re-created if dropped.
+1. An automated tool calls the `PUT /tunnels` api on the tunnel server's Management Port, and sends a JSON file describing which ports should be opened on the tunnel server, which client they should be tunneled to, and which ports on the client they should be tunneled to, as well as whether or not the HAProxy "PROXY" protocol should be used. This connection can use TLS Client Authentication.
+1. The tunnel client connects to the tunnel server on the Tunnel Control Port. This connection can use TLS Client Authentication. This connection will be held open and re-created if dropped.
 1. An internet user connects to the tunnel server on one of the ports defined in the JSON. The internet user's request is tunneled through the original connection from the tunnel client, and then proxied to the web server software running on the self-hoster's server computer.
 
 
@@ -72,6 +72,7 @@ I have a few requirements for this system.
 ### What did you add on top of the koding/tunnel package?
 
 * A command line application which can be run in client mode or server mode based on a JSON config file. 
+  * Optional TLS with Client Authentication
   * management API:
     * GET /clients
     * PUT /tunnnels
@@ -79,3 +80,15 @@ I have a few requirements for this system.
 * Added support for HAProxy "PROXY" protocol. 
 * Added support for Port mappings between front end and back end.
 * Fixed various bugs related to connection lifecycle.
+
+### How to build
+
+```
+go build -o tunnel -tags netgo 
+
+# -tags netgo? what?
+# this is a work around for dynamic linking on alpine linux
+# see: https://stackoverflow.com/questions/36279253/go-compiled-binary-wont-run-in-an-alpine-docker-container-on-ubuntu-host
+
+docker build -t sequentialread/tunnel:0.0.1 .
+```
