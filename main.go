@@ -96,6 +96,9 @@ func runClient(configFileName *string) {
 		log.Fatalf("runClient(): can't json.Unmarshal(configBytes, &config) because %s \n", err)
 	}
 
+	configToLog, _ := json.MarshalIndent(config, "", "  ")
+	log.Printf("using config:\n%s\n", string(configToLog))
+
 	dialFunction := net.Dial
 
 	if config.UseTls {
@@ -149,6 +152,9 @@ func runServer(configFileName *string) {
 		fmt.Printf("runServer(): can't json.Unmarshal(configBytes, &config) because %s \n", err)
 		os.Exit(1)
 	}
+
+	configToLog, _ := json.MarshalIndent(config, "", "  ")
+	log.Printf("using config:\n%s\n", string(configToLog))
 
 	clientStateChangeChannel := make(chan *tunnel.ClientStateChange)
 

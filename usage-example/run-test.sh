@@ -12,13 +12,13 @@ go build -o ./listener listener.go
 echo "Starting the tunnel server with tunnel mux port: 9056, management port: 9057 "
 echo ""
 
-./tunnel -mode server -configFile server-config.json 2>&1  >> test.log  &
+./tunnel -mode server -configFile server-config.json >> test.log 2>&1  &
 SERVER_PID=$!
 
 echo "Starting the \"listener\" test app. It listens on port 9001.  This would be your web  application server."
 echo ""
 
-./listener  2>&1 >> test.log &
+./listener  >> test.log 2>&1  &
 LISTENER_PID=$!
 
 sleep 1
@@ -26,7 +26,7 @@ sleep 1
 
 echo "Starting the tunnel client.  Client Identifier: TestClient1"
 echo ""
-./tunnel -mode client -configFile client-config.json 2>&1 >> test.log &
+./tunnel -mode client -configFile client-config.json >> test.log 2>&1  &
 CLIENT_PID=$!
 
 sleep 1
@@ -41,7 +41,7 @@ echo "HTTP GET localhost:9057/clients:"
 curl --cacert "InternalCA+chain.crt" \
   --key "TestClient1@example.com.key" \
   --cert "TestClient1@example.com+chain.crt" \
-  -s https://localhost:9057/clients 2>&1 >> test.log 
+  -s https://localhost:9057/clients >> test.log 2>&1  
 echo ""
 echo ""
 
@@ -52,7 +52,7 @@ echo "HTTP PUT localhost:9057/tunnels:"
 curl --cacert "InternalCA+chain.crt" \
   --key "TestClient1@example.com.key" \
   --cert "TestClient1@example.com+chain.crt" \
-   -s -X PUT -H "Content-Type: application/json" -d @tunnels.json https://localhost:9057/tunnels 2>&1 >> test.log 
+   -s -X PUT -H "Content-Type: application/json" -d @tunnels.json https://localhost:9057/tunnels >> test.log 2>&1  
 echo ""
 echo ""
 
