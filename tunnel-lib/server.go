@@ -160,6 +160,8 @@ func (s *Server) serveTCPConn(conn net.Conn) {
 }
 
 func (s *Server) handleTCPConn(conn net.Conn) error {
+	// TODO getListenerInfo should return the bytes we read to try to get teh hostname
+	// then we stream.write those right after the SendProxyProtocolv1 bit.
 	listenerInfo, ok := s.virtualAddrs.getListenerInfo(conn)
 	if !ok {
 		return fmt.Errorf("no virtual address available for %s", conn.LocalAddr())
@@ -485,7 +487,7 @@ func (s *Server) changeState(identifier string, state ClientState, err error) (p
 // 	s.virtualHosts.DeleteHost(host)
 // }
 
-// AddAddr starts accepting connections on listener l, routing every connection
+// AddAddr starts accepting connections, routing every connection
 // to a tunnel client given by the identifier.
 //
 // When ip parameter is nil, all connections accepted from the listener are
@@ -496,16 +498,16 @@ func (s *Server) changeState(identifier string, state ClientState, err error) (p
 //
 // If l listens on multiple interfaces it's desirable to call AddAddr multiple
 // times with the same l value but different ip one.
-func (s *Server) AddAddr(l net.Listener, ip net.IP, identifier string, sendProxyProtocolv1 bool, backendPort int) {
-	s.virtualAddrs.Add(l, ip, identifier, sendProxyProtocolv1, backendPort)
+func (s *Server) AddAddr(ip net.IP, port int, hostname string, identifier string, sendProxyProtocolv1 bool, backendPort int) error {
+	return s.virtualAddrs.Add(ip, port, hostname, identifier, sendProxyProtocolv1, backendPort)
 }
 
 // DeleteAddr stops listening for connections on the given listener.
 //
 // Upon return no more connections will be tunneled, but as the method does not
 // close the listener, so any ongoing connection won't get interrupted.
-func (s *Server) DeleteAddr(l net.Listener, ip net.IP) {
-	s.virtualAddrs.Delete(l, ip)
+func (s *Server) DeleteAddr(ip net.IP, port int, hostname string) {
+	s.virtualAddrs.Delete(ip, port, hostname)
 }
 
 func (s *Server) hasIdentifier(identifier string) bool {

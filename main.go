@@ -43,14 +43,11 @@ type ClientConfig struct {
 
 type ListenerConfig struct {
 	HaProxyProxyProtocol bool
-	FrontEndListenPort   int
+	ListenAddress        string
+	ListenHostname       string
+	ListenPort           int
 	BackEndPort          int
 	ClientIdentifier     string
-}
-
-type Listener struct {
-	NetListener net.Listener
-	Config      ListenerConfig
 }
 
 type ClientState struct {
@@ -59,7 +56,7 @@ type ClientState struct {
 }
 
 // Server State
-var listeners []Listener
+var listeners []ListenerConfig
 var clientStatesMutex = &sync.Mutex{}
 var clientStates map[string]ClientState
 var server *tunnel.Server
@@ -238,8 +235,8 @@ func runServer(configFileName *string) {
 }
 
 func setListeners(listenerConfigs []ListenerConfig) (int, string) {
-	currentListenersThatCanKeepRunning := make([]Listener, 0)
-	newListenersThatHaveToBeAdded := make([]Listener, 0)
+	currentListenersThatCanKeepRunning := make([]ListenerConfig, 0)
+	newListenersThatHaveToBeAdded := make([]ListenerConfig, 0)
 
 	for _, newListenerConfig := range listenerConfigs {
 		clientState, everHeardOfClientBefore := clientStates[newListenerConfig.ClientIdentifier]
@@ -254,17 +251,18 @@ func setListeners(listenerConfigs []ListenerConfig) (int, string) {
 	for _, existingListener := range listeners {
 		canKeepRunning := false
 		for _, newListenerConfig := range listenerConfigs {
-			if compareListenerConfigs(existingListener.Config, newListenerConfig) {
+			if compareListenerConfigs(existingListener, newListenerConfig) {
 				canKeepRunning = true
 			}
 		}
 
 		if !canKeepRunning {
-			server.DeleteAddr(existingListener.NetListener, nil)
+			listenAddress := net.ParseIP(existingListener.ListenAddress)
+			if listenAddress == nil {
+				return http.StatusBadRequest, fmt.Sprintf("Bad Request: \"%s\" is not an IP address.", existingListener.ListenAddress)
+			}
 
-			// Do I care if this returned an error? No, I do not. See:
-			// https://github.com/golang/go/blob/master/src/net/net.go#L197
-			existingListener.NetListener.Close()
+			server.DeleteAddr(listenAddress, existingListener.ListenPort, existingListener.ListenHostname)
 
 		} else {
 			currentListenersThatCanKeepRunning = append(currentListenersThatCanKeepRunning, existingListener)
@@ -274,14 +272,26 @@ func setListeners(listenerConfigs []ListenerConfig) (int, string) {
 	for _, newListenerConfig := range listenerConfigs {
 		hasToBeAdded := true
 		for _, existingListener := range listeners {
-			if compareListenerConfigs(existingListener.Config, newListenerConfig) {
+			if compareListenerConfigs(existingListener, newListenerConfig) {
 				hasToBeAdded = false
 			}
 		}
 
 		if hasToBeAdded {
-			listenAddress := fmt.Sprintf(":%d", newListenerConfig.FrontEndListenPort)
-			netListener, err := net.Listen("tcp", listenAddress)
+			listenAddress := net.ParseIP(newListenerConfig.ListenAddress)
+			//fmt.Printf("str: %s, listenAddress: %s\n\n", newListenerConfig.ListenAddress, listenAddress)
+			if listenAddress == nil {
+				return http.StatusBadRequest, fmt.Sprintf("Bad Request: \"%s\" is not an IP address.", newListenerConfig.ListenAddress)
+			}
+			err := server.AddAddr(
+				listenAddress,
+				newListenerConfig.ListenPort,
+				newListenerConfig.ListenHostname,
+				newListenerConfig.ClientIdentifier,
+				newListenerConfig.HaProxyProxyProtocol,
+				newListenerConfig.BackEndPort,
+			)
+
 			if err != nil {
 				if strings.Contains(err.Error(), "already in use") {
 					return http.StatusConflict, fmt.Sprintf("Port Conflict Port %s already in use", listenAddress)
@@ -290,8 +300,8 @@ func setListeners(listenerConfigs []ListenerConfig) (int, string) {
 					return http.StatusInternalServerError, "Unknown Listening Error"
 				}
 			}
-			server.AddAddr(netListener, nil, newListenerConfig.ClientIdentifier, newListenerConfig.HaProxyProxyProtocol, newListenerConfig.BackEndPort)
-			newListenersThatHaveToBeAdded = append(newListenersThatHaveToBeAdded, Listener{NetListener: netListener, Config: newListenerConfig})
+
+			newListenersThatHaveToBeAdded = append(newListenersThatHaveToBeAdded, newListenerConfig)
 		}
 	}
 
@@ -302,9 +312,11 @@ func setListeners(listenerConfigs []ListenerConfig) (int, string) {
 }
 
 func compareListenerConfigs(a, b ListenerConfig) bool {
-	return (a.BackEndPort == b.BackEndPort &&
+	return (a.ListenPort == b.ListenPort &&
+		a.ListenAddress == b.ListenAddress &&
+		a.ListenHostname == b.ListenHostname &&
+		a.BackEndPort == b.BackEndPort &&
 		a.ClientIdentifier == b.ClientIdentifier &&
-		a.FrontEndListenPort == b.FrontEndListenPort &&
 		a.HaProxyProxyProtocol == b.HaProxyProxyProtocol)
 }
 

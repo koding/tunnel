@@ -1,7 +1,9 @@
 [
     {
         "ClientIdentifier": "TestClient1",
-        "FrontEndListenPort": 9000,
+        "ListenPort": 9000,
+        "ListenAddress": "127.0.0.1",
+        "ListenHostname": "localhost",
         "BackEndPort": 9001,
         "HaProxyProxyProtocol": true
     }

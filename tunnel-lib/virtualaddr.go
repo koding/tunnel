@@ -1,6 +1,7 @@
 package tunnel
 
 import (
+	"fmt"
 	"log"
 	"net"
 	"strconv"
@@ -14,11 +15,12 @@ type ListenerInfo struct {
 
 	BackendPort              int
 	AssociatedClientIdentity string
+	Hostname                 string
 }
 
 type listener struct {
 	net.Listener
-	ListenerInfo
+	backends []ListenerInfo
 
 	*vaddrOptions
 
@@ -37,8 +39,8 @@ type vaddrOptions struct {
 type vaddrStorage struct {
 	*vaddrOptions
 
-	listeners map[net.Listener]*listener
-	ports     map[int]*listener // port-based routing: maps port number to identifier
+	listeners map[string]*listener
+	//  ports     map[int]*listener // port-based routing: maps port number to identifier
 	//	ips       map[string]*listener // ip-based routing: maps ip address to identifier
 
 	mu sync.RWMutex
@@ -47,8 +49,8 @@ type vaddrStorage struct {
 func newVirtualAddrs(opts *vaddrOptions) *vaddrStorage {
 	return &vaddrStorage{
 		vaddrOptions: opts,
-		listeners:    make(map[net.Listener]*listener),
-		ports:        make(map[int]*listener),
+		listeners:    make(map[string]*listener),
+		//      ports:        make(map[int]*listener),
 		//		ips:          make(map[string]*listener),
 	}
 }
@@ -72,63 +74,106 @@ func (l *listener) serve() {
 }
 
 func (l *listener) localAddr() string {
-	if addr, ok := l.Addr().(*net.TCPAddr); ok {
+	if addr, ok := l.Listener.Addr().(*net.TCPAddr); ok {
 		if addr.IP.Equal(net.IPv4zero) {
-			return net.JoinHostPort("127.0.0.1", strconv.Itoa(addr.Port))
+			return net.JoinHostPort("0.0.0.0", strconv.Itoa(addr.Port))
 		}
 	}
 	return l.Addr().String()
 }
 
 func (l *listener) stop() {
-	if atomic.CompareAndSwapInt32(&l.done, 0, 1) {
-		// stop is called when no more connections should be accepted by
-		// the user-provided listener; as we can't simple close the listener
-		// to not break the guarantee given by the (*Server).DeleteAddr
-		// method, we make a dummy connection to break out of serve loop.
-		// It is safe to make a dummy connection, as either the following
-		// dial will time out when the listener is busy accepting connections,
-		// or will get closed immadiately after idle listeners accepts connection
-		// and returns from the serve loop.
-		conn, err := net.DialTimeout("tcp", l.localAddr(), defaultTimeout)
-		if err == nil {
-			conn.Close()
-		}
-	}
+
+	atomic.CompareAndSwapInt32(&l.done, 0, 1)
+
+	l.Listener.Close()
+
+	// WTF is this... why.....
+	// --forest
+	//
+	// if atomic.CompareAndSwapInt32(&l.done, 0, 1) {
+	// 	// stop is called when no more connections should be accepted by
+	// 	// the user-provided listener; as we can't simple close the listener
+	// 	// to not break the guarantee given by the (*Server).DeleteAddr
+	// 	// method, we make a dummy connection to break out of serve loop.
+	// 	// It is safe to make a dummy connection, as either the following
+	// 	// dial will time out when the listener is busy accepting connections,
+	// 	// or will get closed immadiately after idle listeners accepts connection
+	// 	// and returns from the serve loop.
+	// 	conn, err := net.DialTimeout("tcp", l.localAddr(), defaultTimeout)
+	// 	if err == nil {
+	// 		conn.Close()
+	// 	}
+	// }
 }
 
-func (vaddr *vaddrStorage) Add(l net.Listener, ip net.IP, ident string, sendProxyProtocolv1 bool, backendPort int) {
+func (vaddr *vaddrStorage) Add(ip net.IP, port int, hostname string, ident string, sendProxyProtocolv1 bool, backendPort int) error {
 	vaddr.mu.Lock()
 	defer vaddr.mu.Unlock()
 
-	lis, ok := vaddr.listeners[l]
+	listenAddress := fmt.Sprintf("%s:%d", ip, port)
+
+	listener, ok := vaddr.listeners[listenAddress]
 	if !ok {
-		lis = vaddr.newListener(l, ident, sendProxyProtocolv1, backendPort)
-		vaddr.listeners[l] = lis
-		go lis.serve()
+		var err error
+		listener, err = vaddr.newListener(ip, port)
+		if err != nil {
+			return err
+		}
+		vaddr.listeners[listenAddress] = listener
+		go listener.serve()
 	}
 
-	vaddr.ports[mustPort(l)] = lis
+	listener.addHost(hostname, ident, sendProxyProtocolv1, backendPort)
+
+	// vaddr.ports[mustPort(l)] = lis
 	// if ip != nil {
 	// 	lis.ips[ip.String()] = struct{}{}
 	// 	vaddr.ips[ip.String()] = ident
 	// } else {
 	// 	vaddr.ports[mustPort(l)] = ident
 	// }
+
+	return nil
 }
 
-func (vaddr *vaddrStorage) Delete(l net.Listener, ip net.IP) {
+func (l *listener) addHost(hostname string, ident string, sendProxyProtocolv1 bool, backendPort int) {
+	l.backends = append(l.backends, ListenerInfo{
+		Hostname:                 hostname,
+		AssociatedClientIdentity: ident,
+		SendProxyProtocolv1:      sendProxyProtocolv1,
+		BackendPort:              backendPort,
+	})
+}
+
+func (l *listener) removeHost(hostname string) {
+	newBackends := make([]ListenerInfo, 0)
+	for _, b := range l.backends {
+		if b.Hostname != hostname {
+			newBackends = append(newBackends, b)
+		}
+	}
+
+	l.backends = newBackends
+}
+
+func (vaddr *vaddrStorage) Delete(ip net.IP, port int, hostname string) {
 	vaddr.mu.Lock()
 	defer vaddr.mu.Unlock()
 
-	lis, ok := vaddr.listeners[l]
+	listenAddress := fmt.Sprintf("%s:%d", ip, port)
+
+	listener, ok := vaddr.listeners[listenAddress]
 	if !ok {
 		return
 	}
 
-	lis.stop()
-	delete(vaddr.ports, mustPort(l))
-	delete(vaddr.listeners, l)
+	listener.removeHost(hostname)
+
+	if len(listener.backends) == 0 {
+		listener.stop()
+		delete(vaddr.listeners, listenAddress)
+	}
 
 	// var stop bool
 
@@ -151,23 +196,27 @@ func (vaddr *vaddrStorage) Delete(l net.Listener, ip net.IP) {
 	// }
 }
 
-func (vaddr *vaddrStorage) newListener(l net.Listener, clientIdentity string, sendProxyProtocolv1 bool, backendPort int) *listener {
-	return &listener{
-		Listener: l,
-		ListenerInfo: ListenerInfo{
-			AssociatedClientIdentity: clientIdentity,
-			SendProxyProtocolv1:      sendProxyProtocolv1,
-			BackendPort:              backendPort,
-		},
-		vaddrOptions: vaddr.vaddrOptions,
-		//ips:          make(map[string]struct{}),
+func (vaddr *vaddrStorage) newListener(ip net.IP, port int) (*listener, error) {
+	listenAddress := net.JoinHostPort(ip.String(), strconv.Itoa(port))
+	fmt.Printf("now listening on %s\n\n", listenAddress)
+
+	netListener, err := net.Listen("tcp", listenAddress)
+	if err != nil {
+		return nil, err
 	}
+
+	return &listener{
+		Listener:     netListener,
+		vaddrOptions: vaddr.vaddrOptions,
+	}, nil
 }
 
 func (vaddr *vaddrStorage) HasIdentifier(identifier string) bool {
-	for _, listener := range vaddr.ports {
-		if listener.AssociatedClientIdentity == identifier {
-			return true
+	for _, listener := range vaddr.listeners {
+		for _, backend := range listener.backends {
+			if backend.AssociatedClientIdentity == identifier {
+				return true
+			}
 		}
 	}
 	// for _, id := range vaddr.ips {
@@ -182,33 +231,68 @@ func (vaddr *vaddrStorage) getListenerInfo(conn net.Conn) (*ListenerInfo, bool) 
 	vaddr.mu.Lock()
 	defer vaddr.mu.Unlock()
 
-	_, port, err := parseHostPort(conn.LocalAddr().String())
+	host, port, err := parseHostPort(conn.LocalAddr().String())
 	if err != nil {
 		log.Printf("vaddrStorage.getListenerInfo(): failed to get identifier for connection %q: %s", conn.LocalAddr(), err)
 		return nil, false
 	}
+
+	for _, listener := range vaddr.listeners {
+		listenerHost, listenerPort, err := parseHostPort(listener.localAddr())
+		if err != nil {
+			fmt.Printf("error parseHostPort on listener address: %s\n", err)
+		}
+
+		fmt.Printf(
+			"host(%s) == listenerHost(%s), port(%d) == listenerPort(%d)\n\n",
+			host, listenerHost, port, listenerPort,
+		)
+
+		if err == nil && (listenerHost == host || listenerHost == "0.0.0.0" || listenerHost == "::") && listenerPort == port {
+
+			log.Printf("pre getHostnameFromSNI ")
+
+			// TODO getHostnameFromSNI doesn't work -- it breaks the test when we uncomment it. Maybe we have to read the bytes
+			// and then pass them along somehow??
+			// hostname, err := getHostnameFromSNI(conn)
+			// if err != nil {
+			// 	log.Printf("failed to get SNI: %s\n", err)
+			// }
+
+			// log.Printf("getHostnameFromSNI: %s\n", hostname)
+
+			// for _, backend := range listener.backends {
+			// 	// TODO glob compare hostname and backend.Hostname
+
+			// }
+
+			return &(listener.backends[0]), true
+		}
+	}
+
+	return nil, false
 
 	// First lookup if there's a ip-based route, then try port-base one.
 	// if ident, ok := vaddr.ips[ip]; ok {
 	// 	return ident, true
 	// }
 
-	listener, ok := vaddr.ports[port]
-	var listenerInfo *ListenerInfo
-	if ok {
-		listenerInfo = &(listener.ListenerInfo)
-	}
-	return listenerInfo, ok
+	// listener, ok := vaddr.ports[port]
+	// var listenerInfo *ListenerInfo
+	// if ok {
+	// 	listenerInfo = &(listener.ListenerInfo)
+	// }
+	// return listenerInfo, ok
 }
 
-func mustPort(l net.Listener) int {
-	_, port, err := parseHostPort(l.Addr().String())
-	if err != nil {
-		// This can happened when user passed custom type that
-		// implements net.Listener, which returns ill-formed
-		// net.Addr value.
-		panic("ill-formed net.Addr: " + err.Error())
-	}
+// func mustPort(l net.Listener) int {
+// 	_, port, err := parseHostPort(l.Addr().String())
+// 	if err != nil {
+// 		// This can happened when user passed custom type that
+// 		// implements net.Listener, which returns ill-formed
+// 		// net.Addr value.
+// 		panic("ill-formed net.Addr: " + err.Error())
+// 	}
 
-	return port
-}
+// 	return port
+// }

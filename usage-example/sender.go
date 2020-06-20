@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"net"
+	//"crypto/tls"
 )
 
 func main() {
@@ -10,6 +11,9 @@ func main() {
 	fmt.Println("Sender: I am dialing localhost:9000")
 
 	conn, err := net.Dial("tcp", "localhost:9000")
+	// conn, err := tls.Dial("tcp", "localhost:9000", &tls.Config{
+	// 	InsecureSkipVerify: true,
+	// })
 	if err != nil {
 		panic(err)
 	}
