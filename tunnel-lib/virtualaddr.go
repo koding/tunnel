@@ -2,9 +2,12 @@ package tunnel
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"net"
+	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 )
@@ -15,7 +18,7 @@ type ListenerInfo struct {
 
 	BackendPort              int
 	AssociatedClientIdentity string
-	Hostname                 string
+	HostnameGlob             string
 }
 
 type listener struct {
@@ -107,7 +110,7 @@ func (l *listener) stop() {
 	// }
 }
 
-func (vaddr *vaddrStorage) Add(ip net.IP, port int, hostname string, ident string, sendProxyProtocolv1 bool, backendPort int) error {
+func (vaddr *vaddrStorage) Add(ip net.IP, port int, hostnameGlob string, ident string, sendProxyProtocolv1 bool, backendPort int) error {
 	vaddr.mu.Lock()
 	defer vaddr.mu.Unlock()
 
@@ -124,7 +127,7 @@ func (vaddr *vaddrStorage) Add(ip net.IP, port int, hostname string, ident strin
 		go listener.serve()
 	}
 
-	listener.addHost(hostname, ident, sendProxyProtocolv1, backendPort)
+	listener.addHost(hostnameGlob, ident, sendProxyProtocolv1, backendPort)
 
 	// vaddr.ports[mustPort(l)] = lis
 	// if ip != nil {
@@ -137,19 +140,19 @@ func (vaddr *vaddrStorage) Add(ip net.IP, port int, hostname string, ident strin
 	return nil
 }
 
-func (l *listener) addHost(hostname string, ident string, sendProxyProtocolv1 bool, backendPort int) {
+func (l *listener) addHost(hostnameGlob string, ident string, sendProxyProtocolv1 bool, backendPort int) {
 	l.backends = append(l.backends, ListenerInfo{
-		Hostname:                 hostname,
+		HostnameGlob:             hostnameGlob,
 		AssociatedClientIdentity: ident,
 		SendProxyProtocolv1:      sendProxyProtocolv1,
 		BackendPort:              backendPort,
 	})
 }
 
-func (l *listener) removeHost(hostname string) {
+func (l *listener) removeHost(hostnameGlob string) {
 	newBackends := make([]ListenerInfo, 0)
 	for _, b := range l.backends {
-		if b.Hostname != hostname {
+		if b.HostnameGlob != hostnameGlob {
 			newBackends = append(newBackends, b)
 		}
 	}
@@ -157,7 +160,7 @@ func (l *listener) removeHost(hostname string) {
 	l.backends = newBackends
 }
 
-func (vaddr *vaddrStorage) Delete(ip net.IP, port int, hostname string) {
+func (vaddr *vaddrStorage) Delete(ip net.IP, port int, hostnameGlob string) {
 	vaddr.mu.Lock()
 	defer vaddr.mu.Unlock()
 
@@ -168,7 +171,7 @@ func (vaddr *vaddrStorage) Delete(ip net.IP, port int, hostname string) {
 		return
 	}
 
-	listener.removeHost(hostname)
+	listener.removeHost(hostnameGlob)
 
 	if len(listener.backends) == 0 {
 		listener.stop()
@@ -227,14 +230,14 @@ func (vaddr *vaddrStorage) HasIdentifier(identifier string) bool {
 	return false
 }
 
-func (vaddr *vaddrStorage) getListenerInfo(conn net.Conn) (*ListenerInfo, bool) {
+func (vaddr *vaddrStorage) getListenerInfo(conn net.Conn) (*ListenerInfo, string, []byte) {
 	vaddr.mu.Lock()
 	defer vaddr.mu.Unlock()
 
 	host, port, err := parseHostPort(conn.LocalAddr().String())
 	if err != nil {
 		log.Printf("vaddrStorage.getListenerInfo(): failed to get identifier for connection %q: %s", conn.LocalAddr(), err)
-		return nil, false
+		return nil, "", make([]byte, 0)
 	}
 
 	for _, listener := range vaddr.listeners {
@@ -243,56 +246,133 @@ func (vaddr *vaddrStorage) getListenerInfo(conn net.Conn) (*ListenerInfo, bool) 
 			fmt.Printf("error parseHostPort on listener address: %s\n", err)
 		}
 
-		fmt.Printf(
-			"host(%s) == listenerHost(%s), port(%d) == listenerPort(%d)\n\n",
-			host, listenerHost, port, listenerPort,
-		)
+		// fmt.Printf(
+		// 	"host(%s) == listenerHost(%s), port(%d) == listenerPort(%d)\n\n",
+		// 	host, listenerHost, port, listenerPort,
+		// )
 
-		if err == nil && (listenerHost == host || listenerHost == "0.0.0.0" || listenerHost == "::") && listenerPort == port {
+		listenHostMatches := listenerHost == host || listenerHost == "0.0.0.0" || listenerHost == "::"
+		listenPortMatches := listenerPort == port
 
-			log.Printf("pre getHostnameFromSNI ")
+		if err == nil && listenHostMatches && listenPortMatches {
 
-			// TODO getHostnameFromSNI doesn't work -- it breaks the test when we uncomment it. Maybe we have to read the bytes
-			// and then pass them along somehow??
-			// hostname, err := getHostnameFromSNI(conn)
+			//log.Printf("pre getHostnameFromSNI ")
+
+			connectionHeader := make([]byte, 1024)
+			n, err := conn.Read(connectionHeader)
+			if err != nil && err != io.EOF {
+				log.Printf("vaddrStorage.getListenerInfo(): failed to read header for connection %q: %s", conn.LocalAddr(), err)
+				return nil, "", make([]byte, 0)
+			}
+
+			hostname, err := getHostnameFromSNI(connectionHeader[:n])
+
+			// This will happen every time someone connects with a non-TLS protocol.
+			// Its not a big deal, we can ignore it.
 			// if err != nil {
-			// 	log.Printf("failed to get SNI: %s\n", err)
+			// 	log.Printf("vaddrStorage.getListenerInfo(): failed to get SNI for connection %q: %s\n", conn.LocalAddr(), err)
 			// }
 
-			// log.Printf("getHostnameFromSNI: %s\n", hostname)
+			//log.Printf("getHostnameFromSNI: %s\n", hostname)
 
-			// for _, backend := range listener.backends {
-			// 	// TODO glob compare hostname and backend.Hostname
+			recordSpecificity := -10
+			var mostSpecificMatchingBackend *ListenerInfo = nil
+			for _, backend := range listener.backends {
+				globToUse := backend.HostnameGlob
+				if globToUse == "" {
+					globToUse = "*"
+				}
+				numberOfPeriods := len(regexp.MustCompile(`\.`).FindAllString(globToUse, -1))
+				numberOfGlobs := len(regexp.MustCompile(`\*+`).FindAllString(globToUse, -1))
+				specificity := numberOfPeriods - numberOfGlobs
+				if specificity > recordSpecificity && Glob(globToUse, hostname) {
+					recordSpecificity = specificity
+					mostSpecificMatchingBackend = &backend
+				}
+			}
 
-			// }
-
-			return &(listener.backends[0]), true
+			return mostSpecificMatchingBackend, hostname, connectionHeader[:n]
 		}
 	}
 
-	return nil, false
-
-	// First lookup if there's a ip-based route, then try port-base one.
-	// if ident, ok := vaddr.ips[ip]; ok {
-	// 	return ident, true
-	// }
-
-	// listener, ok := vaddr.ports[port]
-	// var listenerInfo *ListenerInfo
-	// if ok {
-	// 	listenerInfo = &(listener.ListenerInfo)
-	// }
-	// return listenerInfo, ok
+	return nil, "", make([]byte, 0)
 }
 
-// func mustPort(l net.Listener) int {
-// 	_, port, err := parseHostPort(l.Addr().String())
-// 	if err != nil {
-// 		// This can happened when user passed custom type that
-// 		// implements net.Listener, which returns ill-formed
-// 		// net.Addr value.
-// 		panic("ill-formed net.Addr: " + err.Error())
-// 	}
+// ---------------------------------------------------------------------------------------------
 
-// 	return port
-// }
+// https://github.com/ryanuber/go-glob/blob/master/glob.go
+
+// The MIT License (MIT)
+
+// Copyright (c) 2014 Ryan Uber
+
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+// The character which is treated like a glob
+const GLOB = "*"
+
+// Glob will test a string pattern, potentially containing globs, against a
+// subject string. The result is a simple true/false, determining whether or
+// not the glob pattern matched the subject text.
+func Glob(pattern, subj string) bool {
+	// Empty pattern can only match empty subject
+	if pattern == "" {
+		return subj == pattern
+	}
+
+	// If the pattern _is_ a glob, it matches everything
+	if pattern == GLOB {
+		return true
+	}
+
+	parts := strings.Split(pattern, GLOB)
+
+	if len(parts) == 1 {
+		// No globs in pattern, so test for equality
+		return subj == pattern
+	}
+
+	leadingGlob := strings.HasPrefix(pattern, GLOB)
+	trailingGlob := strings.HasSuffix(pattern, GLOB)
+	end := len(parts) - 1
+
+	// Go over the leading parts and ensure they match.
+	for i := 0; i < end; i++ {
+		idx := strings.Index(subj, parts[i])
+
+		switch i {
+		case 0:
+			// Check the first section. Requires special handling.
+			if !leadingGlob && idx != 0 {
+				return false
+			}
+		default:
+			// Check that the middle parts match.
+			if idx < 0 {
+				return false
+			}
+		}
+
+		// Trim evaluated text from subj as we loop over the pattern.
+		subj = subj[idx+len(parts[i]):]
+	}
+
+	// Reached the last section. Requires special handling.
+	return trailingGlob || strings.HasSuffix(subj, parts[end])
+}

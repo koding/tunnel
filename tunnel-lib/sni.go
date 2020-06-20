@@ -1,10 +1,8 @@
 package tunnel
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
-	"net"
 	"strings"
 )
 
@@ -12,14 +10,10 @@ const tlsRecordTypeHandshake uint8 = 22
 const tlsMessageTypeClientHello uint8 = 1
 const tlsExtensionServerName uint16 = 0
 
-func getHostnameFromSNI(conn net.Conn) (string, error) {
+func getHostnameFromSNI(buf []byte) (string, error) {
 
-	bufReader := bufio.NewReader(conn)
-
-	buf, err := bufReader.Peek(1024)
-
-	if err != nil {
-		return "", fmt.Errorf("cant read 1024 bytes. %s\n", err)
+	if len(buf) < 5 {
+		return "", fmt.Errorf("expected buffer byte length > 5, got %d", len(buf))
 	}
 
 	// tls record type

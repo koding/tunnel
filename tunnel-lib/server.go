@@ -162,9 +162,9 @@ func (s *Server) serveTCPConn(conn net.Conn) {
 func (s *Server) handleTCPConn(conn net.Conn) error {
 	// TODO getListenerInfo should return the bytes we read to try to get teh hostname
 	// then we stream.write those right after the SendProxyProtocolv1 bit.
-	listenerInfo, ok := s.virtualAddrs.getListenerInfo(conn)
-	if !ok {
-		return fmt.Errorf("no virtual address available for %s", conn.LocalAddr())
+	listenerInfo, sniHostname, connectionHeader := s.virtualAddrs.getListenerInfo(conn)
+	if listenerInfo == nil {
+		return fmt.Errorf("no virtual host available for %s (hostname: %s)", conn.LocalAddr(), sniHostname)
 	}
 
 	_, port, err := parseHostPort(conn.LocalAddr().String())
@@ -196,6 +196,10 @@ func (s *Server) handleTCPConn(conn net.Conn) error {
 		}
 
 		stream.Write([]byte(fmt.Sprintf("PROXY %s %s %s %s %s\r\n", proxyNetwork, remoteHost, localHost, remotePort, localPort)))
+	}
+
+	if len(connectionHeader) > 0 {
+		stream.Write(connectionHeader)
 	}
 
 	disconnectedChan := make(chan bool)
@@ -498,16 +502,23 @@ func (s *Server) changeState(identifier string, state ClientState, err error) (p
 //
 // If l listens on multiple interfaces it's desirable to call AddAddr multiple
 // times with the same l value but different ip one.
-func (s *Server) AddAddr(ip net.IP, port int, hostname string, identifier string, sendProxyProtocolv1 bool, backendPort int) error {
-	return s.virtualAddrs.Add(ip, port, hostname, identifier, sendProxyProtocolv1, backendPort)
+func (s *Server) AddAddr(
+	ip net.IP,
+	port int,
+	hostnameGlob string,
+	identifier string,
+	sendProxyProtocolv1 bool,
+	backendPort int,
+) error {
+	return s.virtualAddrs.Add(ip, port, hostnameGlob, identifier, sendProxyProtocolv1, backendPort)
 }
 
 // DeleteAddr stops listening for connections on the given listener.
 //
 // Upon return no more connections will be tunneled, but as the method does not
 // close the listener, so any ongoing connection won't get interrupted.
-func (s *Server) DeleteAddr(ip net.IP, port int, hostname string) {
-	s.virtualAddrs.Delete(ip, port, hostname)
+func (s *Server) DeleteAddr(ip net.IP, port int, hostnameGlob string) {
+	s.virtualAddrs.Delete(ip, port, hostnameGlob)
 }
 
 func (s *Server) hasIdentifier(identifier string) bool {

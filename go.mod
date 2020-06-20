@@ -1,5 +1,7 @@
 module git.sequentialread.com/forest/tunnel
 
+go 1.14
+
 require (
 	github.com/armon/go-proxyproto v0.0.0-20180202201750-5b7edb60ff5f
 	github.com/cenkalti/backoff v2.1.0+incompatible

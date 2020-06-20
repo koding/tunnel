@@ -44,7 +44,7 @@ type ClientConfig struct {
 type ListenerConfig struct {
 	HaProxyProxyProtocol bool
 	ListenAddress        string
-	ListenHostname       string
+	ListenHostnameGlob   string
 	ListenPort           int
 	BackEndPort          int
 	ClientIdentifier     string
@@ -262,7 +262,7 @@ func setListeners(listenerConfigs []ListenerConfig) (int, string) {
 				return http.StatusBadRequest, fmt.Sprintf("Bad Request: \"%s\" is not an IP address.", existingListener.ListenAddress)
 			}
 
-			server.DeleteAddr(listenAddress, existingListener.ListenPort, existingListener.ListenHostname)
+			server.DeleteAddr(listenAddress, existingListener.ListenPort, existingListener.ListenHostnameGlob)
 
 		} else {
 			currentListenersThatCanKeepRunning = append(currentListenersThatCanKeepRunning, existingListener)
@@ -286,7 +286,7 @@ func setListeners(listenerConfigs []ListenerConfig) (int, string) {
 			err := server.AddAddr(
 				listenAddress,
 				newListenerConfig.ListenPort,
-				newListenerConfig.ListenHostname,
+				newListenerConfig.ListenHostnameGlob,
 				newListenerConfig.ClientIdentifier,
 				newListenerConfig.HaProxyProxyProtocol,
 				newListenerConfig.BackEndPort,
@@ -295,10 +295,10 @@ func setListeners(listenerConfigs []ListenerConfig) (int, string) {
 			if err != nil {
 				if strings.Contains(err.Error(), "already in use") {
 					return http.StatusConflict, fmt.Sprintf("Port Conflict Port %s already in use", listenAddress)
-				} else {
-					log.Printf("setListeners(): can't net.Listen(\"tcp\", \"%s\")  because %s \n", listenAddress, err)
-					return http.StatusInternalServerError, "Unknown Listening Error"
 				}
+
+				log.Printf("setListeners(): can't net.Listen(\"tcp\", \"%s\")  because %s \n", listenAddress, err)
+				return http.StatusInternalServerError, "Unknown Listening Error"
 			}
 
 			newListenersThatHaveToBeAdded = append(newListenersThatHaveToBeAdded, newListenerConfig)
@@ -314,7 +314,7 @@ func setListeners(listenerConfigs []ListenerConfig) (int, string) {
 func compareListenerConfigs(a, b ListenerConfig) bool {
 	return (a.ListenPort == b.ListenPort &&
 		a.ListenAddress == b.ListenAddress &&
-		a.ListenHostname == b.ListenHostname &&
+		a.ListenHostnameGlob == b.ListenHostnameGlob &&
 		a.BackEndPort == b.BackEndPort &&
 		a.ClientIdentifier == b.ClientIdentifier &&
 		a.HaProxyProxyProtocol == b.HaProxyProxyProtocol)
