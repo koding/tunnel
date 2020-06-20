@@ -8,8 +8,6 @@ import (
 
 func main() {
 
-	fmt.Println("Sender: I am dialing localhost:9000")
-
 	conn, err := net.Dial("tcp", "localhost:9000")
 	// conn, err := tls.Dial("tcp", "localhost:9000", &tls.Config{
 	// 	InsecureSkipVerify: true,
@@ -17,6 +15,9 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+
+	fmt.Printf("Sender: I am dialing localhost:9000 from %s\n", conn.LocalAddr())
+
 	sent, err := conn.Write([]byte("Hello ! Hello! \n"))
 	if err != nil {
 		panic(err)
