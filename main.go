@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -36,6 +37,7 @@ type ClientConfig struct {
 	ServerTunnelControlPort  int
 	ServerManagementPort     int
 	UseTls                   bool
+	ServiceToLocalAddrMap    map[string]string
 	CaCertificateFile        string
 	ClientTlsKeyFile         string
 	ClientTlsCertificateFile string
@@ -46,7 +48,7 @@ type ListenerConfig struct {
 	ListenAddress        string
 	ListenHostnameGlob   string
 	ListenPort           int
-	BackEndPort          int
+	BackEndService       string
 	ClientIdentifier     string
 }
 
@@ -94,7 +96,7 @@ func runClient(configFileName *string) {
 	}
 
 	configToLog, _ := json.MarshalIndent(config, "", "  ")
-	log.Printf("using config:\n%s\n", string(configToLog))
+	log.Printf("theshold client is starting up using config:\n%s\n", string(configToLog))
 
 	dialFunction := net.Dial
 
@@ -126,7 +128,14 @@ func runClient(configFileName *string) {
 		DebugLog:   config.DebugLog,
 		Identifier: config.ClientIdentifier,
 		ServerAddr: fmt.Sprintf("%s:%d", config.ServerHost, config.ServerTunnelControlPort),
-		Dial:       dialFunction,
+		FetchLocalAddr: func(service string) (string, error) {
+			localAddr, hasLocalAddr := config.ServiceToLocalAddrMap[service]
+			if !hasLocalAddr {
+				return "", errors.New("service not configured. See ServiceToLocalAddrMap in client config file.")
+			}
+			return localAddr, nil
+		},
+		Dial: dialFunction,
 	}
 
 	client, err = tunnel.NewClient(tunnelClientConfig)
@@ -151,7 +160,7 @@ func runServer(configFileName *string) {
 	}
 
 	configToLog, _ := json.MarshalIndent(config, "", "  ")
-	log.Printf("using config:\n%s\n", string(configToLog))
+	log.Printf("threshold server is starting up using config:\n%s\n", string(configToLog))
 
 	clientStateChangeChannel := make(chan *tunnel.ClientStateChange)
 
@@ -289,7 +298,7 @@ func setListeners(listenerConfigs []ListenerConfig) (int, string) {
 				newListenerConfig.ListenHostnameGlob,
 				newListenerConfig.ClientIdentifier,
 				newListenerConfig.HaProxyProxyProtocol,
-				newListenerConfig.BackEndPort,
+				newListenerConfig.BackEndService,
 			)
 
 			if err != nil {
@@ -315,7 +324,7 @@ func compareListenerConfigs(a, b ListenerConfig) bool {
 	return (a.ListenPort == b.ListenPort &&
 		a.ListenAddress == b.ListenAddress &&
 		a.ListenHostnameGlob == b.ListenHostnameGlob &&
-		a.BackEndPort == b.BackEndPort &&
+		a.BackEndService == b.BackEndService &&
 		a.ClientIdentifier == b.ClientIdentifier &&
 		a.HaProxyProxyProtocol == b.HaProxyProxyProtocol)
 }

@@ -172,11 +172,11 @@ func (s *Server) handleTCPConn(conn net.Conn) error {
 		return err
 	}
 
-	backendPortToDial := port
-	if listenerInfo.BackendPort != -1 && listenerInfo.BackendPort != 0 {
-		backendPortToDial = listenerInfo.BackendPort
+	service := strconv.Itoa(port)
+	if listenerInfo.BackendService != "" {
+		service = listenerInfo.BackendService
 	}
-	stream, err := s.dial(listenerInfo.AssociatedClientIdentity, proto.TCP, backendPortToDial)
+	stream, err := s.dial(listenerInfo.AssociatedClientIdentity, service)
 	if err != nil {
 		return err
 	}
@@ -225,7 +225,7 @@ func (s *Server) proxy(disconnectedChan chan bool, dst, src net.Conn, side strin
 	}
 }
 
-func (s *Server) dial(identifier string, p proto.Type, port int) (net.Conn, error) {
+func (s *Server) dial(identifier string, service string) (net.Conn, error) {
 	control, ok := s.getControl(identifier)
 	if !ok {
 		return nil, errNoClientSession
@@ -237,9 +237,8 @@ func (s *Server) dial(identifier string, p proto.Type, port int) (net.Conn, erro
 	}
 
 	msg := proto.ControlMessage{
-		Action:    proto.RequestClientSession,
-		Protocol:  p,
-		LocalPort: port,
+		Action:  proto.RequestClientSession,
+		Service: service,
 	}
 
 	if s.debugLog {
@@ -508,9 +507,9 @@ func (s *Server) AddAddr(
 	hostnameGlob string,
 	identifier string,
 	sendProxyProtocolv1 bool,
-	backendPort int,
+	service string,
 ) error {
-	return s.virtualAddrs.Add(ip, port, hostnameGlob, identifier, sendProxyProtocolv1, backendPort)
+	return s.virtualAddrs.Add(ip, port, hostnameGlob, identifier, sendProxyProtocolv1, service)
 }
 
 // DeleteAddr stops listening for connections on the given listener.

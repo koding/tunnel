@@ -6,7 +6,7 @@ const (
 	ControlPath = "/_controlPath/"
 
 	// ClientIdentifierHeader is header carrying information about tunnel identifier.
-	ClientIdentifierHeader = "X-KTunnel-Identifier"
+	ClientIdentifierHeader = "X-Threshold-Identifier"
 
 	// control messages
 

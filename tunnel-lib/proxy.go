@@ -13,15 +13,6 @@ import (
 // ProxyFunc is responsible for forwarding a remote connection to local server and writing the response back.
 type ProxyFunc func(remote net.Conn, msg *proto.ControlMessage)
 
-var (
-	// DefaultProxyFuncs holds global default proxy functions for all transport protocols.
-	DefaultProxyFuncs = ProxyFuncs{
-		TCP: new(TCPProxy).Proxy,
-	}
-	// DefaultProxy is a ProxyFunc that uses DefaultProxyFuncs.
-	DefaultProxy = Proxy(ProxyFuncs{})
-)
-
 // ProxyFuncs is a collection of ProxyFunc.
 type ProxyFuncs struct {
 	// TCP is custom implementation of TCP proxing.
@@ -31,18 +22,12 @@ type ProxyFuncs struct {
 // Proxy returns a ProxyFunc that uses custom function if provided, otherwise falls back to DefaultProxyFuncs.
 func Proxy(p ProxyFuncs) ProxyFunc {
 	return func(remote net.Conn, msg *proto.ControlMessage) {
-		var f ProxyFunc
-		f = DefaultProxyFuncs.TCP
-		if p.TCP != nil {
-			f = p.TCP
+		if p.TCP == nil {
+			panic("TCP handler is required for Proxy")
 		}
 
-		if f == nil {
-			log.Printf("Proxy(): Could not determine proxy function for %v\n", msg)
-			remote.Close()
-		}
-
-		f(remote, msg)
+		// I removed all the other handlers that are not TCP 😇
+		p.TCP(remote, msg)
 	}
 }
 

@@ -16,7 +16,7 @@ type ListenerInfo struct {
 	//Send the HAProxy PROXY protocol v1 header to the proxy client before streaming TCP from the remote client.
 	SendProxyProtocolv1 bool
 
-	BackendPort              int
+	BackendService           string
 	AssociatedClientIdentity string
 	HostnameGlob             string
 }
@@ -110,7 +110,7 @@ func (l *listener) stop() {
 	// }
 }
 
-func (vaddr *vaddrStorage) Add(ip net.IP, port int, hostnameGlob string, ident string, sendProxyProtocolv1 bool, backendPort int) error {
+func (vaddr *vaddrStorage) Add(ip net.IP, port int, hostnameGlob string, ident string, sendProxyProtocolv1 bool, backendService string) error {
 	vaddr.mu.Lock()
 	defer vaddr.mu.Unlock()
 
@@ -127,7 +127,7 @@ func (vaddr *vaddrStorage) Add(ip net.IP, port int, hostnameGlob string, ident s
 		go listener.serve()
 	}
 
-	listener.addHost(hostnameGlob, ident, sendProxyProtocolv1, backendPort)
+	listener.addHost(hostnameGlob, ident, sendProxyProtocolv1, backendService)
 
 	// vaddr.ports[mustPort(l)] = lis
 	// if ip != nil {
@@ -140,12 +140,12 @@ func (vaddr *vaddrStorage) Add(ip net.IP, port int, hostnameGlob string, ident s
 	return nil
 }
 
-func (l *listener) addHost(hostnameGlob string, ident string, sendProxyProtocolv1 bool, backendPort int) {
+func (l *listener) addHost(hostnameGlob string, ident string, sendProxyProtocolv1 bool, service string) {
 	l.backends = append(l.backends, ListenerInfo{
 		HostnameGlob:             hostnameGlob,
 		AssociatedClientIdentity: ident,
 		SendProxyProtocolv1:      sendProxyProtocolv1,
-		BackendPort:              backendPort,
+		BackendService:           service,
 	})
 }
 

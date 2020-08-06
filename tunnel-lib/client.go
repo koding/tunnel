@@ -117,6 +117,15 @@ type ClientConfig struct {
 	// Required if ServerAddress is not set.
 	FetchServerAddr func() (string, error)
 
+	// REQUIRED either FetchLocalAddr or Proxy  MUST be provided.
+
+	// a function that returns local address (ip and port) depending on service name
+	FetchLocalAddr func(service string) (string, error)
+
+	// Proxy defines custom proxing logic. This is optional extension point
+	// where you can provide your local server selection or communication rules.
+	Proxy ProxyFunc
+
 	// Dial provides custom transport layer for client server communication.
 	//
 	// If nil, default implementation is to return net.Dial("tcp", address).
@@ -124,10 +133,6 @@ type ClientConfig struct {
 	// It can be used for connection monitoring, setting different timeouts or
 	// securing the connection.
 	Dial func(network, address string) (net.Conn, error)
-
-	// Proxy defines custom proxing logic. This is optional extension point
-	// where you can provide your local server selection or communication rules.
-	Proxy ProxyFunc
 
 	// StateChanges receives state transition details each time client
 	// connection state changes. The channel is expected to be sufficiently
@@ -153,14 +158,6 @@ type ClientConfig struct {
 
 	// Debug enables debug mode, enable only if you want to debug the server.
 	DebugLog bool
-
-	// DEPRECATED:
-
-	// LocalAddr is DEPRECATED please use ProxyHTTP.LocalAddr, see ProxyOverwrite for more details.
-	LocalAddr string
-
-	// FetchLocalAddr is DEPRECATED please use ProxyTCP.FetchLocalAddr, see ProxyOverwrite for more details.
-	FetchLocalAddr func(port int) (string, error)
 }
 
 // verify is used to verify the ClientConfig
@@ -179,8 +176,8 @@ func (c *ClientConfig) verify() error {
 		}
 	}
 
-	if c.Proxy != nil && (c.LocalAddr != "" || c.FetchLocalAddr != nil) {
-		return errors.New("both Proxy and LocalAddr or FetchLocalAddr are set")
+	if c.FetchLocalAddr == nil && c.Proxy == nil {
+		return errors.New("one of either Proxy or FetchLocalAddr is required")
 	}
 
 	return nil
@@ -200,16 +197,10 @@ func NewClient(cfg *ClientConfig) (*Client, error) {
 		yamuxConfig = cfg.YamuxConfig
 	}
 
-	var proxy = DefaultProxy
-	if cfg.Proxy != nil {
-		proxy = cfg.Proxy
-	}
-	// DEPRECATED API SUPPORT
-	if cfg.LocalAddr != "" || cfg.FetchLocalAddr != nil {
+	proxy := cfg.Proxy
+	if proxy == nil {
 		var f ProxyFuncs
-		if cfg.FetchLocalAddr != nil {
-			f.TCP = (&TCPProxy{FetchLocalAddr: cfg.FetchLocalAddr, DebugLog: cfg.DebugLog}).Proxy
-		}
+		f.TCP = (&TCPProxy{FetchLocalAddr: cfg.FetchLocalAddr, DebugLog: cfg.DebugLog}).Proxy
 		proxy = Proxy(f)
 	}
 

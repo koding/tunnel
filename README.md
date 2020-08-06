@@ -31,8 +31,7 @@ Starting the tunnel server with tunnel mux port: 9056, management port: 9057
 
 Starting the "listener" test app. It listens on port 9001.  This would be your web  application server.
 
-Listener: I am listening on port 9001
-2020/06/20 18:24:27 using config:
+2020/08/06 14:00:03 threshold server is starting up using config:
 {
   "DebugLog": false,
   "TunnelControlPort": 9056,
@@ -42,10 +41,11 @@ Listener: I am listening on port 9001
   "ServerTlsKeyFile": "localhost.key",
   "ServerTlsCertificateFile": "localhost+chain.crt"
 }
-2020/06/20 18:24:27 runServer(): the server should be running now
+Listener: I am listening on port 9001
+2020/08/06 14:00:03 runServer(): the server should be running now
 Starting the tunnel client.  Client Identifier: TestClient1
 
-2020/06/20 18:24:28 using config:
+2020/08/06 14:00:04 theshold client is starting up using config:
 {
   "DebugLog": false,
   "ClientIdentifier": "TestClient1",
@@ -53,6 +53,9 @@ Starting the tunnel client.  Client Identifier: TestClient1
   "ServerTunnelControlPort": 9056,
   "ServerManagementPort": 9057,
   "UseTls": true,
+  "ServiceToLocalAddrMap": {
+    "fooService": "127.0.0.1:9001"
+  },
   "CaCertificateFile": "InternalCA+chain.crt",
   "ClientTlsKeyFile": "TestClient1@example.com.key",
   "ClientTlsCertificateFile": "TestClient1@example.com+chain.crt"
@@ -66,14 +69,14 @@ Sending the tunnel configuration to the server.
 HTTP PUT localhost:9057/tunnels:
 now listening on 127.0.0.1:9000
 
-[{"HaProxyProxyProtocol":true,"ListenAddress":"127.0.0.1","ListenHostnameGlob":"*","ListenPort":9000,"BackEndPort":9001,"ClientIdentifier":"TestClient1"}]
+[{"HaProxyProxyProtocol":true,"ListenAddress":"127.0.0.1","ListenHostnameGlob":"*","ListenPort":9000,"BackEndService":"fooService","ClientIdentifier":"TestClient1"}]
 
 Starting the "sender" test app. 
 It connects to the front end port of the tunnel (port 9000).  This would be your end user who wants to use the web application.
 
-Sender: I am dialing localhost:9000 from 127.0.0.1:35488
+Sender: I am dialing localhost:9000 from 127.0.0.1:59382
 Sender: sent 16 bytes
-Listener: Someone connected from: 127.0.0.1:35488
+Listener: Someone connected from: 127.0.0.1:59382
 Listener: read 16 bytes
 Listener: the sender sent: Hello ! Hello! 
 
@@ -104,7 +107,8 @@ I have a few requirements for this system.
     * PUT /tunnnels
 * Simplicity and Laser-like focus on "opaque" usage of TCP/TLS. Removed HTTP/WebSocket/old Virtual Hosts code.
 * Added support for HAProxy "PROXY" protocol. 
-* Added support for Port mappings between front end and back end.
+* Added support for Port mappings between front end and back end. 
+* Introduced concept of a "service" string instead of port number, so the client decides what ports to connect to & how, not the server. 
 * Added support TLS SNI based virtual hosts. (Hostname based routing)
 * Fixed various bugs related to connection lifecycle.
 

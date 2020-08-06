@@ -4,7 +4,7 @@
         "ListenPort": 9000,
         "ListenAddress": "127.0.0.1",
         "ListenHostnameGlob": "*",
-        "BackEndPort": 9001,
+        "BackEndService": "fooService",
         "HaProxyProxyProtocol": true
     }
 ]
