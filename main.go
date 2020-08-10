@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -21,11 +22,17 @@ import (
 )
 
 type ServerConfig struct {
-	DebugLog                 bool
-	TunnelControlPort        int
-	ManagementPort           int
+	DebugLog   bool
+	ListenPort int
+
+	// Domain is only used for validating the TLS client certificates
+	// when TLS is used.  the cert's Subject CommonName is expected to be <ClientId>@<Domain>
+	// I did this because I believe this is a standard for TLS client certs,
+	// based on domain users/email addresses.
+	Domain string
+
 	UseTls                   bool
-	CaCertificateFile        string
+	CaCertificateFilesGlob   string
 	ServerTlsKeyFile         string
 	ServerTlsCertificateFile string
 }
@@ -33,12 +40,10 @@ type ServerConfig struct {
 type ClientConfig struct {
 	DebugLog                 bool
 	ClientIdentifier         string
-	ServerHost               string
-	ServerTunnelControlPort  int
-	ServerManagementPort     int
+	ServerAddr               string
 	UseTls                   bool
 	ServiceToLocalAddrMap    map[string]string
-	CaCertificateFile        string
+	CaCertificateFilesGlob   string
 	ClientTlsKeyFile         string
 	ClientTlsCertificateFile string
 }
@@ -55,6 +60,10 @@ type ListenerConfig struct {
 type ClientState struct {
 	CurrentState string
 	LastState    string
+}
+
+type ManagementHttpHandler struct {
+	ControlHandler http.Handler
 }
 
 // Server State
@@ -106,12 +115,19 @@ func runClient(configFileName *string) {
 			log.Fatal(err)
 		}
 
-		caCert, err := ioutil.ReadFile(config.CaCertificateFile)
+		certificates, err := filepath.Glob(config.CaCertificateFilesGlob)
 		if err != nil {
 			log.Fatal(err)
 		}
+
 		caCertPool := x509.NewCertPool()
-		caCertPool.AppendCertsFromPEM(caCert)
+		for _, filename := range certificates {
+			caCert, err := ioutil.ReadFile(filename)
+			if err != nil {
+				log.Fatal(err)
+			}
+			caCertPool.AppendCertsFromPEM(caCert)
+		}
 
 		tlsConfig := &tls.Config{
 			Certificates: []tls.Certificate{cert},
@@ -127,7 +143,7 @@ func runClient(configFileName *string) {
 	tunnelClientConfig := &tunnel.ClientConfig{
 		DebugLog:   config.DebugLog,
 		Identifier: config.ClientIdentifier,
-		ServerAddr: fmt.Sprintf("%s:%d", config.ServerHost, config.ServerTunnelControlPort),
+		ServerAddr: config.ServerAddr,
 		FetchLocalAddr: func(service string) (string, error) {
 			localAddr, hasLocalAddr := config.ServiceToLocalAddrMap[service]
 			if !hasLocalAddr {
@@ -166,6 +182,7 @@ func runServer(configFileName *string) {
 
 	tunnelServerConfig := &tunnel.ServerConfig{
 		StateChanges: clientStateChangeChannel,
+		Domain:       config.Domain,
 		DebugLog:     config.DebugLog,
 	}
 	server, err = tunnel.NewServer(tunnelServerConfig)
@@ -200,12 +217,20 @@ func runServer(configFileName *string) {
 	})()
 
 	if config.UseTls {
-		caCert, err := ioutil.ReadFile(config.CaCertificateFile)
+
+		certificates, err := filepath.Glob(config.CaCertificateFilesGlob)
 		if err != nil {
 			log.Fatal(err)
 		}
+
 		caCertPool := x509.NewCertPool()
-		caCertPool.AppendCertsFromPEM(caCert)
+		for _, filename := range certificates {
+			caCert, err := ioutil.ReadFile(filename)
+			if err != nil {
+				log.Fatal(err)
+			}
+			caCertPool.AppendCertsFromPEM(caCert)
+		}
 
 		tlsConfig := &tls.Config{
 			ClientCAs:  caCertPool,
@@ -214,31 +239,18 @@ func runServer(configFileName *string) {
 		tlsConfig.BuildNameToCertificate()
 
 		httpsManagementServer := &http.Server{
-			Addr:      fmt.Sprintf(":%d", config.ManagementPort),
+			Addr:      fmt.Sprintf(":%d", config.ListenPort),
 			TLSConfig: tlsConfig,
-			Handler:   &(ManagementHttpHandler{}),
-		}
-
-		go (func() {
-			httpsManagementServer.ListenAndServeTLS(config.ServerTlsCertificateFile, config.ServerTlsKeyFile)
-		})()
-
-		httpsTunnelServer := &http.Server{
-			Addr:      fmt.Sprintf(":%d", config.TunnelControlPort),
-			TLSConfig: tlsConfig,
-			Handler:   server,
+			Handler:   &(ManagementHttpHandler{ControlHandler: server}),
 		}
 
 		log.Print("runServer(): the server should be running now\n")
-		httpsTunnelServer.ListenAndServeTLS(config.ServerTlsCertificateFile, config.ServerTlsKeyFile)
+		httpsManagementServer.ListenAndServeTLS(config.ServerTlsCertificateFile, config.ServerTlsKeyFile)
 
 	} else {
-		go (func() {
-			http.ListenAndServe(fmt.Sprintf(":%d", config.ManagementPort), &(ManagementHttpHandler{}))
-		})()
 
 		log.Print("runServer(): the server should be running now\n")
-		http.ListenAndServe(fmt.Sprintf(":%d", config.TunnelControlPort), server)
+		http.ListenAndServe(fmt.Sprintf(":%d", config.ListenPort), &(ManagementHttpHandler{ControlHandler: server}))
 	}
 
 }
@@ -329,8 +341,6 @@ func compareListenerConfigs(a, b ListenerConfig) bool {
 		a.HaProxyProxyProtocol == b.HaProxyProxyProtocol)
 }
 
-type ManagementHttpHandler struct{}
-
 func (s *ManagementHttpHandler) ServeHTTP(responseWriter http.ResponseWriter, request *http.Request) {
 
 	switch fmt.Sprintf("%s/", path.Clean(request.URL.Path)) {
@@ -395,7 +405,7 @@ func (s *ManagementHttpHandler) ServeHTTP(responseWriter http.ResponseWriter, re
 			http.Error(responseWriter, "405 method not allowed", http.StatusMethodNotAllowed)
 		}
 	default:
-		http.Error(responseWriter, "404 not found. Try GET /ping or PUT /tunnels.", http.StatusNotFound)
+		s.ControlHandler.ServeHTTP(responseWriter, request)
 	}
 }
 

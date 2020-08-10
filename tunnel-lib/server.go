@@ -67,6 +67,9 @@ type Server struct {
 	// stateCh notifies receiver about client state changes.
 	stateCh chan<- *ClientStateChange
 
+	// the domain of the server, used for validating clientIds
+	domain string
+
 	// yamuxConfig is passed to new yamux.Session's
 	yamuxConfig *yamux.Config
 
@@ -84,6 +87,9 @@ type ServerConfig struct {
 	StateChanges chan<- *ClientStateChange
 
 	DebugLog bool
+
+	// the domain of the server, used for validating clientIds
+	Domain string
 
 	// YamuxConfig defines the config which passed to every new yamux.Session. If nil
 	// yamux.DefaultConfig() is used.
@@ -116,6 +122,7 @@ func NewServer(cfg *ServerConfig) (*Server, error) {
 		controls:              newControls(),
 		states:                make(map[string]ClientState),
 		stateCh:               cfg.StateChanges,
+		domain:                cfg.Domain,
 		yamuxConfig:           yamuxConfig,
 		connCh:                connCh,
 		debugLog:              cfg.DebugLog,
@@ -286,7 +293,7 @@ func (s *Server) controlHandler(w http.ResponseWriter, r *http.Request) (ctErr e
 	// https://stackoverflow.com/questions/31751764/get-remote-ssl-certificate-in-golang
 	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
 		cn := r.TLS.PeerCertificates[0].Subject.CommonName
-		if identifier != cn {
+		if fmt.Sprintf("%s@%s", identifier, s.domain) != cn {
 			return fmt.Errorf(
 				"\"%s: %s\" does not match TLS certificate CommonName %s",
 				proto.ClientIdentifierHeader, identifier, cn,

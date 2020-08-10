@@ -1,10 +1,10 @@
 
 {
   "DebugLog": false,
-	"TunnelControlPort": 9056,
-	"ManagementPort":  9057,
+  "Domain": "example.com",
+	"ListenPort":  9056,
   "UseTls": true,
-	"CaCertificateFile": "InternalCA+chain.crt",
+	"CaCertificateFilesGlob": "InternalCA+chain.crt",
 	"ServerTlsKeyFile": "localhost.key",
 	"ServerTlsCertificateFile": "localhost+chain.crt"
 }
