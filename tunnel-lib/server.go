@@ -283,6 +283,7 @@ func (s *Server) controlHandler(w http.ResponseWriter, r *http.Request) (ctErr e
 	// When TLS is turned on, the Client Authentication certificate is required, so in that case
 	// if we got to this point, we should make sure
 	// the ClientIdentifier header matches the CommonName on the client cert.
+	// https://stackoverflow.com/questions/31751764/get-remote-ssl-certificate-in-golang
 	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
 		cn := r.TLS.PeerCertificates[0].Subject.CommonName
 		if identifier != cn {
