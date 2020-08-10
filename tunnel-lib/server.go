@@ -279,12 +279,26 @@ func (s *Server) dial(identifier string, service string) (net.Conn, error) {
 // tunnel TCP connections.
 func (s *Server) controlHandler(w http.ResponseWriter, r *http.Request) (ctErr error) {
 	identifier := r.Header.Get(proto.ClientIdentifierHeader)
-	ok := s.hasIdentifier(identifier)
-	if !ok {
-		// We will allow clients to connect even if they are not configured to be used yet.
-		// In this case they have an empty set of listening front-end ports.
-		//return fmt.Errorf("no host associated for identifier %s. please use server.AddAddr()", identifier)
+
+	// When TLS is turned on, the Client Authentication certificate is required, so in that case
+	// if we got to this point, we should make sure
+	// the ClientIdentifier header matches the CommonName on the client cert.
+	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
+		cn := r.TLS.PeerCertificates[0].Subject.CommonName
+		if identifier != cn {
+			return fmt.Errorf(
+				"\"%s: %s\" does not match TLS certificate CommonName %s",
+				proto.ClientIdentifierHeader, identifier, cn,
+			)
+		}
 	}
+
+	// We will allow clients to connect even if they are not configured to be used yet.
+	// In this case they have an empty set of listening front-end ports.
+	// ok := s.hasIdentifier(identifier)
+	// if !ok {
+	// 	return fmt.Errorf("no host associated for identifier %s. please use server.AddAddr()", identifier)
+	// }
 
 	ct, ok := s.getControl(identifier)
 	if ok {
