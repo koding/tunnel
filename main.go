@@ -225,6 +225,7 @@ func runServer(configFileName *string) {
 
 		caCertPool := x509.NewCertPool()
 		for _, filename := range certificates {
+			log.Printf("loading certificate %s, clients who have a key signed by this certificat will be allowed to connect", filename)
 			caCert, err := ioutil.ReadFile(filename)
 			if err != nil {
 				log.Fatal(err)
@@ -245,12 +246,13 @@ func runServer(configFileName *string) {
 		}
 
 		log.Print("runServer(): the server should be running now\n")
-		httpsManagementServer.ListenAndServeTLS(config.ServerTlsCertificateFile, config.ServerTlsKeyFile)
-
+		err = httpsManagementServer.ListenAndServeTLS(config.ServerTlsCertificateFile, config.ServerTlsKeyFile)
+		panic(err)
 	} else {
 
 		log.Print("runServer(): the server should be running now\n")
-		http.ListenAndServe(fmt.Sprintf(":%d", config.ListenPort), &(ManagementHttpHandler{ControlHandler: server}))
+		err = http.ListenAndServe(fmt.Sprintf(":%d", config.ListenPort), &(ManagementHttpHandler{ControlHandler: server}))
+		panic(err)
 	}
 
 }
