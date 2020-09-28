@@ -1,17 +1,22 @@
-FROM alpine:3.8
+FROM golang:1.15.2-alpine as build
 
-WORKDIR /tunnel
+ARG GOARCH=amd64
+ARG GO_BUILD_ARGS=
 
-COPY tunnel /tunnel
+RUN apk add --update --no-cache ca-certificates git
+RUN mkdir /build
+WORKDIR /build
+COPY . .
 
-RUN echo " \
-{ \
-  \"DebugLog\": false, \
-  \"TunnelControlPort\": 9056, \
-  \"ManagementPort\":  9057 \
-} \
-" > /tunnel/config.json
+RUN go build -v $GO_BUILD_ARGS -o /build/threshold main.go
 
-ENTRYPOINT [ "/tunnel/tunnel" ]
+FROM scratch
+
+COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+COPY --from=build /build/threshold /threshold
+
+# NOTE: the user will have to mount the config file & any required TLS certs/keys
+# as well as override the default command (-mode server)
+
+ENTRYPOINT ["/threshold"]
 CMD ["-mode", "server"]
-
