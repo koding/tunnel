@@ -1,6 +1,6 @@
 #!/bin/bash -e
 
-VERSION="0.0.1"
+VERSION="0.0.5"
 
 rm -rf dockerbuild || true
 mkdir dockerbuild
@@ -8,6 +8,10 @@ mkdir dockerbuild
 cp Dockerfile dockerbuild/Dockerfile-amd64
 cp Dockerfile dockerbuild/Dockerfile-arm
 cp Dockerfile dockerbuild/Dockerfile-arm64
+
+sed -E 's|FROM alpine|FROM amd64/alpine|' -i dockerbuild/Dockerfile-amd64
+sed -E 's|FROM alpine|FROM arm32v7/alpine|'   -i dockerbuild/Dockerfile-arm
+sed -E 's|FROM alpine|FROM arm64v8/alpine|' -i dockerbuild/Dockerfile-arm64
 
 sed -E 's/GOARCH=/GOARCH=amd64/' -i dockerbuild/Dockerfile-amd64
 sed -E 's/GOARCH=/GOARCH=arm/'   -i dockerbuild/Dockerfile-arm

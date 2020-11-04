@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -17,6 +18,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	tunnel "git.sequentialread.com/forest/tunnel/tunnel-lib"
 )
@@ -42,10 +44,11 @@ type ClientConfig struct {
 	ClientIdentifier         string
 	ServerAddr               string
 	UseTls                   bool
-	ServiceToLocalAddrMap    map[string]string
+	ServiceToLocalAddrMap    *map[string]string
 	CaCertificateFilesGlob   string
 	ClientTlsKeyFile         string
 	ClientTlsCertificateFile string
+	AdminUnixSocket          string
 }
 
 type ListenerConfig struct {
@@ -66,6 +69,13 @@ type ManagementHttpHandler struct {
 	ControlHandler http.Handler
 }
 
+type LiveConfigUpdate struct {
+	Listeners             []ListenerConfig
+	ServiceToLocalAddrMap map[string]string
+}
+
+type adminAPI struct{}
+
 // Server State
 var listeners []ListenerConfig
 var clientStatesMutex = &sync.Mutex{}
@@ -74,6 +84,9 @@ var server *tunnel.Server
 
 // Client State
 var client *tunnel.Client
+var tlsClientConfig *tls.Config
+var serverURL *string
+var serviceToLocalAddrMap *map[string]string
 
 func main() {
 
@@ -94,6 +107,88 @@ func main() {
 
 }
 
+// admin api handler for /liveconfig over unix socket
+func (handler adminAPI) ServeHTTP(response http.ResponseWriter, request *http.Request) {
+	switch path.Clean(request.URL.Path) {
+	case "/liveconfig":
+		if request.Method == "PUT" {
+			requestBytes, err := ioutil.ReadAll(request.Body)
+			if err != nil {
+				log.Printf("adminAPI: request read error: %+v\n\n", err)
+				http.Error(response, "500 request read error", http.StatusInternalServerError)
+				return
+			}
+			var configUpdate LiveConfigUpdate
+			err = json.Unmarshal(requestBytes, &configUpdate)
+			if err != nil {
+				log.Printf("adminAPI: can't parse JSON: %+v\n\n", err)
+				http.Error(response, "400 bad request: can't parse JSON", http.StatusBadRequest)
+				return
+			}
+
+			sendBytes, err := json.Marshal(configUpdate.Listeners)
+			if err != nil {
+				log.Printf("adminAPI: Listeners json serialization failed: %+v\n\n", err)
+				http.Error(response, "500 Listeners json serialization failed", http.StatusInternalServerError)
+				return
+			}
+			apiURL := fmt.Sprintf("https://%s/tunnels", *serverURL)
+			tunnelsRequest, err := http.NewRequest("PUT", apiURL, bytes.NewReader(sendBytes))
+			if err != nil {
+				log.Printf("adminAPI: error creating tunnels request: %+v\n\n", err)
+				http.Error(response, "500 error creating tunnels request", http.StatusInternalServerError)
+				return
+			}
+			tunnelsRequest.Header.Add("content-type", "application/json")
+
+			client := &http.Client{
+				Transport: &http.Transport{
+					TLSClientConfig: tlsClientConfig,
+				},
+				Timeout: 10 * time.Second,
+			}
+			tunnelsResponse, err := client.Do(tunnelsRequest)
+			if err != nil {
+				log.Printf("adminAPI: Do(tunnelsRequest): %+v\n\n", err)
+				http.Error(response, "502 tunnels request failed", http.StatusBadGateway)
+				return
+			}
+			tunnelsResponseBytes, err := ioutil.ReadAll(tunnelsResponse.Body)
+			if err != nil {
+				log.Printf("adminAPI: tunnelsResponse read error: %+v\n\n", err)
+				http.Error(response, "502 tunnelsResponse read error", http.StatusBadGateway)
+				return
+			}
+
+			if tunnelsResponse.StatusCode != http.StatusOK {
+				log.Printf(
+					"adminAPI: tunnelsRequest returned HTTP %d: %s\n\n",
+					tunnelsResponse.StatusCode, string(tunnelsResponseBytes),
+				)
+				http.Error(
+					response,
+					fmt.Sprintf("502 tunnels request returned HTTP %d", tunnelsResponse.StatusCode),
+					http.StatusBadGateway,
+				)
+				return
+			}
+
+			serviceToLocalAddrMap = &configUpdate.ServiceToLocalAddrMap
+
+			response.Header().Add("content-type", "application/json")
+			response.WriteHeader(http.StatusOK)
+			response.Write(tunnelsResponseBytes)
+
+		} else {
+			response.Header().Set("Allow", "PUT")
+			http.Error(response, "405 method not allowed, try PUT", http.StatusMethodNotAllowed)
+		}
+	default:
+		http.Error(response, "404 not found, try PUT /liveconfig", http.StatusNotFound)
+	}
+
+}
+
 func runClient(configFileName *string) {
 
 	configBytes := getConfigBytes(configFileName)
@@ -103,6 +198,8 @@ func runClient(configFileName *string) {
 	if err != nil {
 		log.Fatalf("runClient(): can't json.Unmarshal(configBytes, &config) because %s \n", err)
 	}
+	serviceToLocalAddrMap = config.ServiceToLocalAddrMap
+	serverURL = &config.ServerAddr
 
 	configToLog, _ := json.MarshalIndent(config, "", "  ")
 	log.Printf("theshold client is starting up using config:\n%s\n", string(configToLog))
@@ -110,6 +207,7 @@ func runClient(configFileName *string) {
 	dialFunction := net.Dial
 
 	if config.UseTls {
+
 		cert, err := tls.LoadX509KeyPair(config.ClientTlsCertificateFile, config.ClientTlsKeyFile)
 		if err != nil {
 			log.Fatal(err)
@@ -129,29 +227,32 @@ func runClient(configFileName *string) {
 			caCertPool.AppendCertsFromPEM(caCert)
 		}
 
-		tlsConfig := &tls.Config{
+		tlsClientConfig = &tls.Config{
 			Certificates: []tls.Certificate{cert},
 			RootCAs:      caCertPool,
 		}
-		tlsConfig.BuildNameToCertificate()
+		tlsClientConfig.BuildNameToCertificate()
 
 		dialFunction = func(network, address string) (net.Conn, error) {
-			return tls.Dial(network, address, tlsConfig)
+			return tls.Dial(network, address, tlsClientConfig)
 		}
 	}
 
+	clientStateChanges := make(chan *tunnel.ClientStateChange)
 	tunnelClientConfig := &tunnel.ClientConfig{
 		DebugLog:   config.DebugLog,
 		Identifier: config.ClientIdentifier,
 		ServerAddr: config.ServerAddr,
 		FetchLocalAddr: func(service string) (string, error) {
-			localAddr, hasLocalAddr := config.ServiceToLocalAddrMap[service]
+			//log.Printf("(*serviceToLocalAddrMap): %+v\n\n", (*serviceToLocalAddrMap))
+			localAddr, hasLocalAddr := (*serviceToLocalAddrMap)[service]
 			if !hasLocalAddr {
 				return "", errors.New("service not configured. See ServiceToLocalAddrMap in client config file.")
 			}
 			return localAddr, nil
 		},
-		Dial: dialFunction,
+		Dial:         dialFunction,
+		StateChanges: clientStateChanges,
 	}
 
 	client, err = tunnel.NewClient(tunnelClientConfig)
@@ -159,9 +260,46 @@ func runClient(configFileName *string) {
 		log.Fatalf("runClient(): can't create tunnel client because %s \n", err)
 	}
 
+	go (func() {
+		for {
+			stateChange := <-clientStateChanges
+			fmt.Printf("clientStateChange: %s\n", stateChange.String())
+		}
+	})()
+
+	go runClientAdminApi(config)
+
 	fmt.Print("runClient(): the client should be running now\n")
 	client.Start()
 
+}
+
+func runClientAdminApi(config ClientConfig) {
+
+	os.Remove(config.AdminUnixSocket)
+
+	listenAddress, err := net.ResolveUnixAddr("unix", config.AdminUnixSocket)
+	if err != nil {
+		panic(fmt.Sprintf("runClient(): can't start because net.ResolveUnixAddr() returned %+v", err))
+	}
+
+	listener, err := net.ListenUnix("unix", listenAddress)
+	if err != nil {
+		panic(fmt.Sprintf("can't start because net.ListenUnix() returned %+v", err))
+	}
+	log.Printf("AdminUnixSocket Listening: %v\n\n", config.AdminUnixSocket)
+	defer listener.Close()
+
+	server := http.Server{
+		Handler:      adminAPI{},
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+	}
+
+	err = server.Serve(listener)
+	if err != nil {
+		panic(fmt.Sprintf("AdminUnixSocket server returned %+v", err))
+	}
 }
 
 func runServer(configFileName *string) {
@@ -345,8 +483,8 @@ func compareListenerConfigs(a, b ListenerConfig) bool {
 
 func (s *ManagementHttpHandler) ServeHTTP(responseWriter http.ResponseWriter, request *http.Request) {
 
-	switch fmt.Sprintf("%s/", path.Clean(request.URL.Path)) {
-	case "/clients/":
+	switch path.Clean(request.URL.Path) {
+	case "/clients":
 		if request.Method == "GET" {
 			clientStatesMutex.Lock()
 			bytes, err := json.Marshal(clientStates)
@@ -362,7 +500,7 @@ func (s *ManagementHttpHandler) ServeHTTP(responseWriter http.ResponseWriter, re
 			responseWriter.Header().Set("Allow", "PUT")
 			http.Error(responseWriter, "405 Method Not Allowed", http.StatusMethodNotAllowed)
 		}
-	case "/tunnels/":
+	case "/tunnels":
 		if request.Method == "PUT" {
 			if request.Header.Get("Content-Type") != "application/json" {
 				http.Error(responseWriter, "415 Unsupported Media Type: Content-Type must be application/json", http.StatusUnsupportedMediaType)
@@ -399,7 +537,7 @@ func (s *ManagementHttpHandler) ServeHTTP(responseWriter http.ResponseWriter, re
 			responseWriter.Header().Set("Allow", "PUT")
 			http.Error(responseWriter, "405 Method Not Allowed", http.StatusMethodNotAllowed)
 		}
-	case "/ping/":
+	case "/ping":
 		if request.Method == "GET" {
 			fmt.Fprint(responseWriter, "pong")
 		} else {
