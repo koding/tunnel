@@ -5,9 +5,6 @@ const (
 	// ControlPath is http.Handler url path for control connection.
 	ControlPath = "/_controlPath/"
 
-	// ClientIdentifierHeader is header carrying information about tunnel identifier.
-	ClientIdentifierHeader = "X-Threshold-ClientId"
-
 	// control messages
 
 	// Connected is message sent by server to client when control connection was established.

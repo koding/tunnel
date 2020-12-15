@@ -431,9 +431,6 @@ func (c *Client) connect(identifier, serverAddr string) error {
 	if err != nil {
 		return fmt.Errorf("error creating request to %s: %s", remoteURL, err)
 	}
-
-	req.Header.Set(proto.ClientIdentifierHeader, identifier)
-
 	if c.config.DebugLog {
 		log.Printf("Client.connect(): Writing request to TCP: %+v\n", req)
 	}

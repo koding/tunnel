@@ -70,6 +70,9 @@ type Server struct {
 	// the domain of the server, used for validating clientIds
 	domain string
 
+	// see ServerConfig.ValidateCertificate comment
+	validateCertificate func(domain string, request *http.Request) (identifier string, tenantId string, err error)
+
 	// yamuxConfig is passed to new yamux.Session's
 	yamuxConfig *yamux.Config
 
@@ -90,6 +93,15 @@ type ServerConfig struct {
 
 	// the domain of the server, used for validating clientIds
 	Domain string
+
+	// function that analyzes the TLS client certificate of the request.
+	// this is based on the CommonName attribute of the TLS certificate.
+	// If we are in multi-tenant mode, it must be formatted like `<tenantId>.<nodeId>@<domain>`
+	//                      otherwise, it must be formatted like         `<nodeId>@<domain>`
+	// <domain> must match the configured Domain of this Threshold server
+	// the identifier it returns will be `<tenantId>.<nodeId>` or `<nodeId>`.
+	// the tenantId it returns will be `<tenantId>` or ""
+	ValidateCertificate func(domain string, request *http.Request) (identifier string, tenantId string, err error)
 
 	// YamuxConfig defines the config which passed to every new yamux.Session. If nil
 	// yamux.DefaultConfig() is used.
@@ -285,28 +297,13 @@ func (s *Server) dial(identifier string, service string) (net.Conn, error) {
 // controlHandler is used to capture incoming tunnel connect requests into raw
 // tunnel TCP connections.
 func (s *Server) controlHandler(w http.ResponseWriter, r *http.Request) (ctErr error) {
-	identifier := r.Header.Get(proto.ClientIdentifierHeader)
 
-	// When TLS is turned on, the Client Authentication certificate is required, so in that case
-	// if we got to this point, we should make sure
-	// the ClientIdentifier header matches the CommonName on the client cert.
-	// https://stackoverflow.com/questions/31751764/get-remote-ssl-certificate-in-golang
-	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
-		cn := r.TLS.PeerCertificates[0].Subject.CommonName
-		if fmt.Sprintf("%s@%s", identifier, s.domain) != cn {
-			return fmt.Errorf(
-				"\"%s: %s\" does not match TLS certificate CommonName %s",
-				proto.ClientIdentifierHeader, identifier, cn,
-			)
-		}
+	clientId, tenantId, err := s.validateCertificate(s.domain, r)
+	fmt.Println(tenantId)
+	if err != nil {
+		return err
 	}
-
-	// We will allow clients to connect even if they are not configured to be used yet.
-	// In this case they have an empty set of listening front-end ports.
-	// ok := s.hasIdentifier(identifier)
-	// if !ok {
-	// 	return fmt.Errorf("no host associated for identifier %s. please use server.AddAddr()", identifier)
-	// }
+	identifier := clientId
 
 	ct, ok := s.getControl(identifier)
 	if ok {
@@ -613,7 +610,8 @@ func (s *Server) checkConnect(fn func(w http.ResponseWriter, r *http.Request) er
 		if err := fn(w, r); err != nil {
 			log.Printf("Server.checkConnect(): Handler err: %v\n", err.Error())
 
-			if identifier := r.Header.Get(proto.ClientIdentifierHeader); identifier != "" {
+			identifier, _, err := s.validateCertificate(s.domain, r)
+			if err == nil {
 				s.onDisconnect(identifier, err)
 			}
 

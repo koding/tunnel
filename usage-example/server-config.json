@@ -3,7 +3,6 @@
   "DebugLog": false,
   "Domain": "example.com",
 	"ListenPort":  9056,
-  "UseTls": true,
 	"CaCertificateFilesGlob": "InternalCA+chain.crt",
 	"ServerTlsKeyFile": "localhost.key",
 	"ServerTlsCertificateFile": "localhost+chain.crt"

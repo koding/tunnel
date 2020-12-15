@@ -2,7 +2,6 @@
   "DebugLog": false,
 	"ClientIdentifier": "TestClient1",
 	"ServerAddr": "localhost:9056",
-	"UseTls": true,
 	"ServiceToLocalAddrMap": {
 		"fooService": "127.0.0.1:9001"
 	},

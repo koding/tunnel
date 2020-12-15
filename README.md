@@ -36,7 +36,6 @@ Starting the "listener" test app. It listens on port 9001.  This would be your w
   "DebugLog": false,
   "TunnelControlPort": 9056,
   "ManagementPort": 9057,
-  "UseTls": true,
   "CaCertificateFile": "InternalCA+chain.crt",
   "ServerTlsKeyFile": "localhost.key",
   "ServerTlsCertificateFile": "localhost+chain.crt"
@@ -52,7 +51,6 @@ Starting the tunnel client.  Client Identifier: TestClient1
   "ServerHost": "localhost",
   "ServerTunnelControlPort": 9056,
   "ServerManagementPort": 9057,
-  "UseTls": true,
   "ServiceToLocalAddrMap": {
     "fooService": "127.0.0.1:9001"
   },
