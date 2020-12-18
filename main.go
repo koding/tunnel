@@ -679,24 +679,49 @@ func (s *PrometheusMetricsAPI) ServeHTTP(responseWriter http.ResponseWriter, req
 		return time.Now().UnixNano() / int64(time.Millisecond)
 	}
 
-	responseWriter.Header().Set("Content-Type", "text/plain; version=0.0.4")
-
 	writeMetric := func(inbound map[string]int64, outbound map[string]int64, name, tag, desc string) {
 		timestamp := getMillisecondsSinceUnixEpoch()
 		responseWriter.Write([]byte(fmt.Sprintf("# HELP %s %s\n", name, desc)))
 		responseWriter.Write([]byte(fmt.Sprintf("# TYPE %s counter\n", name)))
-		for id, bytes := range inbound {
-			responseWriter.Write([]byte(fmt.Sprintf("%s{%s=\"%s\",direction=\"inbound\"} %d %d\n", name, tag, id, bytes, timestamp)))
+		for id, bytez := range inbound {
+			responseWriter.Write([]byte(fmt.Sprintf("%s{%s=\"%s\",direction=\"inbound\"} %d %d\n", name, tag, id, bytez, timestamp)))
 		}
-		for id, bytes := range outbound {
-			responseWriter.Write([]byte(fmt.Sprintf("%s{%s=\"%s\",direction=\"outbound\"} %d %d\n", name, tag, id, bytes, timestamp)))
+		for id, bytez := range outbound {
+			responseWriter.Write([]byte(fmt.Sprintf("%s{%s=\"%s\",direction=\"outbound\"} %d %d\n", name, tag, id, bytez, timestamp)))
 		}
 	}
 
-	if s.MultiTenantServerMode {
-		writeMetric(s.InboundByTenant, s.OutboundByTenant, "bandwidth_by_tenant", "tenant", "bandwidth usage by tenant in bytes, excluding usage from control protocol.")
+	if strings.Contains(request.Header.Get("Accept"), "application/json") {
+		var bytez []byte
+		var err error
+		if s.MultiTenantServerMode {
+			bytez, err = json.MarshalIndent(PrometheusMetricsAPI{
+				InboundByTenant:  s.InboundByTenant,
+				OutboundByTenant: s.OutboundByTenant,
+			}, "", "  ")
+		} else {
+			bytez, err = json.MarshalIndent(PrometheusMetricsAPI{
+				InboundByService:  s.InboundByService,
+				OutboundByService: s.OutboundByService,
+			}, "", "  ")
+		}
+
+		if err != nil {
+			log.Printf(fmt.Sprintf("500 internal server error: %s", err))
+			http.Error(responseWriter, "500 internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		responseWriter.Header().Set("Content-Type", "application/json")
+		responseWriter.Write(bytez)
 	} else {
-		writeMetric(s.InboundByService, s.OutboundByService, "bandwidth_by_service", "service", "bandwidth usage by service in bytes.")
+		responseWriter.Header().Set("Content-Type", "text/plain; version=0.0.4")
+
+		if s.MultiTenantServerMode {
+			writeMetric(s.InboundByTenant, s.OutboundByTenant, "bandwidth_by_tenant", "tenant", "bandwidth usage by tenant in bytes, excluding usage from control protocol.")
+		} else {
+			writeMetric(s.InboundByService, s.OutboundByService, "bandwidth_by_service", "service", "bandwidth usage by service in bytes.")
+		}
 	}
 }
 
