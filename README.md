@@ -47,7 +47,7 @@ Starting the tunnel client.  Client Identifier: TestClient1
 2020/08/06 14:00:04 theshold client is starting up using config:
 {
   "DebugLog": false,
-  "ClientIdentifier": "TestClient1",
+  "ClientId": "TestClient1",
   "ServerHost": "localhost",
   "ServerTunnelControlPort": 9056,
   "ServerManagementPort": 9057,
@@ -67,7 +67,7 @@ Sending the tunnel configuration to the server.
 HTTP PUT localhost:9057/tunnels:
 now listening on 127.0.0.1:9000
 
-[{"HaProxyProxyProtocol":true,"ListenAddress":"127.0.0.1","ListenHostnameGlob":"*","ListenPort":9000,"BackEndService":"fooService","ClientIdentifier":"TestClient1"}]
+[{"HaProxyProxyProtocol":true,"ListenAddress":"127.0.0.1","ListenHostnameGlob":"*","ListenPort":9000,"BackEndService":"fooService","ClientId":"TestClient1"}]
 
 Starting the "sender" test app. 
 It connects to the front end port of the tunnel (port 9000).  This would be your end user who wants to use the web application.

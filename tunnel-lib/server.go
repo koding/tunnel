@@ -24,6 +24,7 @@ import (
 var (
 	errNoClientSession = errors.New("no client session established")
 	defaultTimeout     = 10 * time.Second
+	metricChunkSize    = 1000000 // one megabyte
 )
 
 // Server is responsible for proxying public connections to the client over a
@@ -70,6 +71,8 @@ type Server struct {
 	// the domain of the server, used for validating clientIds
 	domain string
 
+	bandwidth chan<- BandwidthMetric
+
 	// see ServerConfig.ValidateCertificate comment
 	validateCertificate func(domain string, request *http.Request) (identifier string, tenantId string, err error)
 
@@ -77,6 +80,14 @@ type Server struct {
 	yamuxConfig *yamux.Config
 
 	debugLog bool
+}
+
+type BandwidthMetric struct {
+	Bytes         int
+	RemoteAddress net.Addr
+	Inbound       bool
+	Service       string
+	ClientId      string
 }
 
 // ServerConfig defines the configuration for the Server
@@ -94,6 +105,8 @@ type ServerConfig struct {
 	// the domain of the server, used for validating clientIds
 	Domain string
 
+	Bandwidth chan<- BandwidthMetric
+
 	// function that analyzes the TLS client certificate of the request.
 	// this is based on the CommonName attribute of the TLS certificate.
 	// If we are in multi-tenant mode, it must be formatted like `<tenantId>.<nodeId>@<domain>`
@@ -101,7 +114,7 @@ type ServerConfig struct {
 	// <domain> must match the configured Domain of this Threshold server
 	// the identifier it returns will be `<tenantId>.<nodeId>` or `<nodeId>`.
 	// the tenantId it returns will be `<tenantId>` or ""
-	ValidateCertificate func(domain string, request *http.Request) (identifier string, tenantId string, err error)
+	ValidateCertificate func(domain string, multiTenantMode bool, request *http.Request) (identifier string, tenantId string, err error)
 
 	// YamuxConfig defines the config which passed to every new yamux.Session. If nil
 	// yamux.DefaultConfig() is used.
@@ -133,6 +146,7 @@ func NewServer(cfg *ServerConfig) (*Server, error) {
 		virtualAddrs:          newVirtualAddrs(opts),
 		controls:              newControls(),
 		states:                make(map[string]ClientState),
+		bandwidth:             cfg.Bandwidth,
 		stateCh:               cfg.StateChanges,
 		domain:                cfg.Domain,
 		yamuxConfig:           yamuxConfig,
@@ -191,11 +205,11 @@ func (s *Server) handleTCPConn(conn net.Conn) error {
 		return err
 	}
 
-	service := strconv.Itoa(port)
+	service := fmt.Sprintf("port%d", port)
 	if listenerInfo.BackendService != "" {
 		service = listenerInfo.BackendService
 	}
-	stream, err := s.dial(listenerInfo.AssociatedClientIdentity, service)
+	stream, err := s.dial(listenerInfo.AssociatedClientId, service)
 	if err != nil {
 		return err
 	}
@@ -223,8 +237,21 @@ func (s *Server) handleTCPConn(conn net.Conn) error {
 
 	disconnectedChan := make(chan bool)
 
-	go s.proxy(disconnectedChan, conn, stream, "from proxy-client to client")
-	go s.proxy(disconnectedChan, stream, conn, "from client to proxy-client")
+	inboundMetric := BandwidthMetric{
+		Service:       listenerInfo.BackendService,
+		ClientId:      listenerInfo.AssociatedClientId,
+		RemoteAddress: conn.RemoteAddr(),
+		Inbound:       true,
+	}
+	outboundMetric := BandwidthMetric{
+		Service:       listenerInfo.BackendService,
+		ClientId:      listenerInfo.AssociatedClientId,
+		RemoteAddress: conn.RemoteAddr(),
+		Inbound:       false,
+	}
+
+	go s.proxy(disconnectedChan, conn, stream, outboundMetric, s.bandwidth, "outbound from tunnel to remote client")
+	go s.proxy(disconnectedChan, stream, conn, inboundMetric, s.bandwidth, "inbound from remote client to tunnel")
 
 	// Once one member of this conversation has disconnected, we should end the conversation for all parties.
 	<-disconnectedChan
@@ -232,16 +259,82 @@ func (s *Server) handleTCPConn(conn net.Conn) error {
 	return nonil(stream.Close(), conn.Close())
 }
 
-func (s *Server) proxy(disconnectedChan chan bool, dst, src net.Conn, side string) {
+func (s *Server) proxy(disconnectedChan chan bool, dst, src net.Conn, metric BandwidthMetric, bandwidth chan<- BandwidthMetric, side string) {
 	defer (func() { disconnectedChan <- true })()
 
 	if s.debugLog {
 		log.Printf("Server.proxy(): tunneling %s -> %s (%s)\n", src.RemoteAddr(), dst.RemoteAddr(), side)
 	}
-	n, err := io.Copy(dst, src)
+	var n int64
+	var err error
+	if bandwidth != nil {
+		n, err = ioCopyWithMetrics(dst, src, metric, bandwidth)
+	} else {
+		n, err = io.Copy(dst, src)
+	}
+
 	if s.debugLog {
 		log.Printf("Server.proxy(): tunneled %d bytes %s -> %s (%s): %v\n", n, src.RemoteAddr(), dst.RemoteAddr(), side, err)
 	}
+}
+
+// copied from the go standard library source code (io.Copy) with metric collection added.
+func ioCopyWithMetrics(dst io.Writer, src io.Reader, metric BandwidthMetric, bandwidth chan<- BandwidthMetric) (written int64, err error) {
+	size := 32 * 1024
+	if l, ok := src.(*io.LimitedReader); ok && int64(size) > l.N {
+		if l.N < 1 {
+			size = 1
+		} else {
+			size = int(l.N)
+		}
+	}
+	chunkForMetrics := 0
+	buf := make([]byte, size)
+
+	for {
+		nr, er := src.Read(buf)
+		if nr > 0 {
+			nw, ew := dst.Write(buf[0:nr])
+			if nw > 0 {
+				chunkForMetrics += nw
+				if chunkForMetrics >= metricChunkSize {
+					bandwidth <- BandwidthMetric{
+						Inbound:       metric.Inbound,
+						Service:       metric.Service,
+						ClientId:      metric.ClientId,
+						RemoteAddress: metric.RemoteAddress,
+						Bytes:         chunkForMetrics,
+					}
+					chunkForMetrics = 0
+				}
+				written += int64(nw)
+			}
+			if ew != nil {
+				err = ew
+				break
+			}
+			if nr != nw {
+				err = io.ErrShortWrite
+				break
+			}
+		}
+		if er != nil {
+			if er != io.EOF {
+				err = er
+			}
+			break
+		}
+	}
+	if chunkForMetrics > 0 {
+		bandwidth <- BandwidthMetric{
+			Inbound:       metric.Inbound,
+			Service:       metric.Service,
+			ClientId:      metric.ClientId,
+			RemoteAddress: metric.RemoteAddress,
+			Bytes:         chunkForMetrics,
+		}
+	}
+	return written, err
 }
 
 func (s *Server) dial(identifier string, service string) (net.Conn, error) {

@@ -16,9 +16,9 @@ type ListenerInfo struct {
 	//Send the HAProxy PROXY protocol v1 header to the proxy client before streaming TCP from the remote client.
 	SendProxyProtocolv1 bool
 
-	BackendService           string
-	AssociatedClientIdentity string
-	HostnameGlob             string
+	BackendService     string
+	AssociatedClientId string
+	HostnameGlob       string
 }
 
 type listener struct {
@@ -142,10 +142,10 @@ func (vaddr *vaddrStorage) Add(ip net.IP, port int, hostnameGlob string, ident s
 
 func (l *listener) addHost(hostnameGlob string, ident string, sendProxyProtocolv1 bool, service string) {
 	l.backends = append(l.backends, ListenerInfo{
-		HostnameGlob:             hostnameGlob,
-		AssociatedClientIdentity: ident,
-		SendProxyProtocolv1:      sendProxyProtocolv1,
-		BackendService:           service,
+		HostnameGlob:        hostnameGlob,
+		AssociatedClientId:  ident,
+		SendProxyProtocolv1: sendProxyProtocolv1,
+		BackendService:      service,
 	})
 }
 
@@ -217,7 +217,7 @@ func (vaddr *vaddrStorage) newListener(ip net.IP, port int) (*listener, error) {
 func (vaddr *vaddrStorage) HasIdentifier(identifier string) bool {
 	for _, listener := range vaddr.listeners {
 		for _, backend := range listener.backends {
-			if backend.AssociatedClientIdentity == identifier {
+			if backend.AssociatedClientId == identifier {
 				return true
 			}
 		}

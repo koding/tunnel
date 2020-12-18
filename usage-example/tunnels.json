@@ -1,6 +1,6 @@
 [
     {
-        "ClientIdentifier": "TestClient1",
+        "ClientId": "TestClient1",
         "ListenPort": 9000,
         "ListenAddress": "127.0.0.1",
         "ListenHostnameGlob": "*",
