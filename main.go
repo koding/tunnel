@@ -27,7 +27,7 @@ import (
 
 type ServerConfig struct {
 	DebugLog   bool
-	ListenPort int
+	ListenPort int // default 9056
 
 	// Domain is only used for validating the TLS client certificates
 	// when TLS is used.  the cert's Subject CommonName is expected to be <ClientId>@<Domain>
@@ -46,7 +46,7 @@ type ServerConfig struct {
 	// clients can register listeners with any hostname including null, on any open port.
 	//
 	MultiTenantMode                         bool
-	MultiTenantInternalAPIListenPort        int
+	MultiTenantInternalAPIListenPort        int // default 9057
 	MultiTenantInternalAPICaCertificateFile string
 
 	CaCertificateFilesGlob   string
@@ -60,12 +60,19 @@ type ClientConfig struct {
 	DebugLog                 bool
 	ClientId                 string
 	ServerAddr               string
+	Servers                  []string
 	ServiceToLocalAddrMap    *map[string]string
 	CaCertificateFilesGlob   string
 	ClientTlsKeyFile         string
 	ClientTlsCertificateFile string
 	AdminUnixSocket          string
 	Metrics                  MetricsConfig
+}
+
+type ClientServer struct {
+	Client         *tunnel.Client
+	ServerUrl      *url.URL
+	ServerHostPort string
 }
 
 type MetricsConfig struct {
@@ -128,9 +135,8 @@ var tenants map[string]Tenant
 var server *tunnel.Server
 
 // Client State
-var client *tunnel.Client
+var servers []ClientServer
 var tlsClientConfig *tls.Config
-var serverHostPort *string
 var serviceToLocalAddrMap *map[string]string
 
 func main() {
@@ -177,52 +183,56 @@ func (handler adminAPI) ServeHTTP(response http.ResponseWriter, request *http.Re
 				http.Error(response, "500 Listeners json serialization failed", http.StatusInternalServerError)
 				return
 			}
-			apiURL := fmt.Sprintf("https://%s/tunnels", *serverHostPort)
-			tunnelsRequest, err := http.NewRequest("PUT", apiURL, bytes.NewReader(sendBytes))
-			if err != nil {
-				log.Printf("adminAPI: error creating tunnels request: %+v\n\n", err)
-				http.Error(response, "500 error creating tunnels request", http.StatusInternalServerError)
-				return
-			}
-			tunnelsRequest.Header.Add("content-type", "application/json")
-
 			client := &http.Client{
 				Transport: &http.Transport{
 					TLSClientConfig: tlsClientConfig,
 				},
 				Timeout: 10 * time.Second,
 			}
-			tunnelsResponse, err := client.Do(tunnelsRequest)
-			if err != nil {
-				log.Printf("adminAPI: Do(tunnelsRequest): %+v\n\n", err)
-				http.Error(response, "502 tunnels request failed", http.StatusBadGateway)
-				return
-			}
-			tunnelsResponseBytes, err := ioutil.ReadAll(tunnelsResponse.Body)
-			if err != nil {
-				log.Printf("adminAPI: tunnelsResponse read error: %+v\n\n", err)
-				http.Error(response, "502 tunnelsResponse read error", http.StatusBadGateway)
-				return
-			}
 
-			if tunnelsResponse.StatusCode != http.StatusOK {
-				log.Printf(
-					"adminAPI: tunnelsRequest returned HTTP %d: %s\n\n",
-					tunnelsResponse.StatusCode, string(tunnelsResponseBytes),
-				)
-				http.Error(
-					response,
-					fmt.Sprintf("502 tunnels request returned HTTP %d", tunnelsResponse.StatusCode),
-					http.StatusBadGateway,
-				)
-				return
+			// TODO make this concurrent requests, not one by one.
+			for _, server := range servers {
+				apiURL := fmt.Sprintf("https://%s/tunnels", server.ServerHostPort)
+				tunnelsRequest, err := http.NewRequest("PUT", apiURL, bytes.NewReader(sendBytes))
+				if err != nil {
+					log.Printf("adminAPI: error creating tunnels request: %+v\n\n", err)
+					http.Error(response, "500 error creating tunnels request", http.StatusInternalServerError)
+					return
+				}
+				tunnelsRequest.Header.Add("content-type", "application/json")
+
+				tunnelsResponse, err := client.Do(tunnelsRequest)
+				if err != nil {
+					log.Printf("adminAPI: Do(tunnelsRequest): %+v\n\n", err)
+					http.Error(response, "502 tunnels request failed", http.StatusBadGateway)
+					return
+				}
+				tunnelsResponseBytes, err := ioutil.ReadAll(tunnelsResponse.Body)
+				if err != nil {
+					log.Printf("adminAPI: tunnelsResponse read error: %+v\n\n", err)
+					http.Error(response, "502 tunnelsResponse read error", http.StatusBadGateway)
+					return
+				}
+
+				if tunnelsResponse.StatusCode != http.StatusOK {
+					log.Printf(
+						"adminAPI: tunnelsRequest returned HTTP %d: %s\n\n",
+						tunnelsResponse.StatusCode, string(tunnelsResponseBytes),
+					)
+					http.Error(
+						response,
+						fmt.Sprintf("502 tunnels request returned HTTP %d", tunnelsResponse.StatusCode),
+						http.StatusBadGateway,
+					)
+					return
+				}
 			}
 
 			serviceToLocalAddrMap = &configUpdate.ServiceToLocalAddrMap
 
 			response.Header().Add("content-type", "application/json")
 			response.WriteHeader(http.StatusOK)
-			response.Write(tunnelsResponseBytes)
+			response.Write(requestBytes)
 
 		} else {
 			response.Header().Set("Allow", "PUT")
@@ -244,13 +254,31 @@ func runClient(configFileName *string) {
 		log.Fatalf("runClient(): can't json.Unmarshal(configBytes, &config) because %s \n", err)
 	}
 
-	serviceToLocalAddrMap = config.ServiceToLocalAddrMap
-	serverHostPort = &config.ServerAddr
-	serverURLString := fmt.Sprintf("https://%s", *serverHostPort)
-	serverURL, err := url.Parse(serverURLString)
-	if err != nil {
-		log.Fatal(fmt.Errorf("failed to parse the ServerAddr (prefixed with https://) '%s' as a url", serverURLString))
+	servers := []ClientServer{}
+	makeServer := func(hostPort string) ClientServer {
+		serverURLString := fmt.Sprintf("https://%s", hostPort)
+		serverURL, err := url.Parse(serverURLString)
+		if err != nil {
+			log.Fatal(fmt.Errorf("failed to parse the ServerAddr (prefixed with https://) '%s' as a url", serverURLString))
+		}
+		return ClientServer{
+			ServerHostPort: hostPort,
+			ServerUrl:      serverURL,
+		}
 	}
+
+	if config.Servers != nil && len(config.Servers) > 0 {
+		if config.ServerAddr != "" {
+			log.Fatal("config contains both Servers and ServerAddr, only use one or the other")
+		}
+		for _, serverHostPort := range config.Servers {
+			servers = append(servers, makeServer(serverHostPort))
+		}
+	} else {
+		servers = []ClientServer{makeServer(config.ServerAddr)}
+	}
+
+	serviceToLocalAddrMap = config.ServiceToLocalAddrMap
 
 	configToLog, _ := json.MarshalIndent(config, "", "  ")
 	log.Printf("theshold client is starting up using config:\n%s\n", string(configToLog))
@@ -270,12 +298,15 @@ func runClient(configFileName *string) {
 			"expected TLS client certificate common name '%s' to match format '<clientId>@<domain>'", commonName,
 		))
 	}
-	if clientIdDomain[1] != serverURL.Hostname() {
-		log.Fatal(fmt.Errorf(
-			"expected TLS client certificate common name domain '%s' to match ServerAddr domain '%s'",
-			clientIdDomain[1], serverURL.Hostname(),
-		))
-	}
+
+	// This is enforced by the server anyways, so no need to enforce it here.
+	// This allows server URLs to use IP addresses, don't require DNS.
+	// if clientIdDomain[1] != serverURL.Hostname() {
+	// 	log.Fatal(fmt.Errorf(
+	// 		"expected TLS client certificate common name domain '%s' to match ServerAddr domain '%s'",
+	// 		clientIdDomain[1], serverURL.Hostname(),
+	// 	))
+	// }
 
 	if clientIdDomain[0] != config.ClientId {
 		log.Fatal(fmt.Errorf(
@@ -308,40 +339,45 @@ func runClient(configFileName *string) {
 		return tls.Dial(network, address, tlsClientConfig)
 	}
 
-	clientStateChanges := make(chan *tunnel.ClientStateChange)
-	tunnelClientConfig := &tunnel.ClientConfig{
-		DebugLog:   config.DebugLog,
-		Identifier: config.ClientId,
-		ServerAddr: config.ServerAddr,
-		FetchLocalAddr: func(service string) (string, error) {
-			//log.Printf("(*serviceToLocalAddrMap): %+v\n\n", (*serviceToLocalAddrMap))
-			localAddr, hasLocalAddr := (*serviceToLocalAddrMap)[service]
-			if !hasLocalAddr {
-				return "", fmt.Errorf("service '%s' not configured. Set ServiceToLocalAddrMap in client config file or HTTP PUT /liveconfig over the AdminUnixSocket.", service)
-			}
-			return localAddr, nil
-		},
-		Dial:         dialFunction,
-		StateChanges: clientStateChanges,
-	}
-
-	client, err = tunnel.NewClient(tunnelClientConfig)
-	if err != nil {
-		log.Fatalf("runClient(): can't create tunnel client because %s \n", err)
-	}
-
-	go (func() {
-		for {
-			stateChange := <-clientStateChanges
-			fmt.Printf("clientStateChange: %s\n", stateChange.String())
-		}
-	})()
-
 	go runClientAdminApi(config)
 
-	fmt.Print("runClient(): the client should be running now\n")
-	client.Start()
+	fetchLocalAddr := func(service string) (string, error) {
+		//log.Printf("(*serviceToLocalAddrMap): %+v\n\n", (*serviceToLocalAddrMap))
+		localAddr, hasLocalAddr := (*serviceToLocalAddrMap)[service]
+		if !hasLocalAddr {
+			return "", fmt.Errorf("service '%s' not configured. Set ServiceToLocalAddrMap in client config file or HTTP PUT /liveconfig over the AdminUnixSocket.", service)
+		}
+		return localAddr, nil
+	}
 
+	for _, server := range servers {
+		clientStateChanges := make(chan *tunnel.ClientStateChange)
+		tunnelClientConfig := &tunnel.ClientConfig{
+			DebugLog:       config.DebugLog,
+			Identifier:     config.ClientId,
+			ServerAddr:     server.ServerHostPort,
+			FetchLocalAddr: fetchLocalAddr,
+			Dial:           dialFunction,
+			StateChanges:   clientStateChanges,
+		}
+
+		client, err := tunnel.NewClient(tunnelClientConfig)
+		if err != nil {
+			log.Fatalf("runClient(): can't create tunnel client for %s because %v \n", server.ServerHostPort, err)
+		}
+
+		go (func() {
+			for {
+				stateChange := <-clientStateChanges
+				log.Printf("%s clientStateChange: %s\n", server.ServerHostPort, stateChange.String())
+			}
+		})()
+
+		server.Client = client
+		go server.Client.Start()
+	}
+
+	log.Print("runClient(): the client should be running now\n")
 }
 
 func runClientAdminApi(config ClientConfig) {
