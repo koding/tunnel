@@ -1,4 +1,4 @@
-# Tunnel [![GoDoc](http://img.shields.io/badge/go-documentation-blue.svg?style=flat-square)](http://godoc.org/git.sequentialread.com/forest/tunnel) [![Go Report Card](https://goreportcard.com/badge/git.sequentialread.com/forest/tunnel)](https://goreportcard.com/report/git.sequentialread.com/forest/tunnel) [![Build Status](http://img.shields.io/travis/koding/tunnel.svg?style=flat-square)](https://travis-ci.org/koding/tunnel)
+# Tunnel 
 
 Tunnel is a server/client package that enables to proxy public connections to
 your local machine over a tunnel connection from the local machine to the

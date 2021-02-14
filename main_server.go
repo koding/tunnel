@@ -373,6 +373,7 @@ func exportMetrics(config MetricsConfig, multiTenantServerMode bool, bandwidth <
 					metricsAPI.OutboundByTenant[tenantIdNodeId[0]] += int64(metric.Bytes)
 				}
 			} else {
+				// TODO shouldn't this be done on the client side only ??
 				if metric.Inbound {
 					metricsAPI.InboundByService[metric.Service] += int64(metric.Bytes)
 				} else {
@@ -392,6 +393,7 @@ func exportMetrics(config MetricsConfig, multiTenantServerMode bool, bandwidth <
 	})()
 }
 
+// TODO move this to the management API / to the client side.
 func (s *PrometheusMetricsAPI) ServeHTTP(responseWriter http.ResponseWriter, request *http.Request) {
 
 	getMillisecondsSinceUnixEpoch := func() int64 {
@@ -410,7 +412,7 @@ func (s *PrometheusMetricsAPI) ServeHTTP(responseWriter http.ResponseWriter, req
 		}
 	}
 
-	if strings.Contains(request.Header.Get("Accept"), "application/json") {
+	if strings.Contains(request.Header.Get("Accept"), "application/json") && !strings.Contains(request.Header.Get("Accept"), "text/plain") {
 		var bytez []byte
 		var err error
 		if s.MultiTenantServerMode {
@@ -419,6 +421,7 @@ func (s *PrometheusMetricsAPI) ServeHTTP(responseWriter http.ResponseWriter, req
 				OutboundByTenant: s.OutboundByTenant,
 			}, "", "  ")
 		} else {
+			// TODO this should probably only be supported on the client side
 			bytez, err = json.MarshalIndent(PrometheusMetricsAPI{
 				InboundByService:  s.InboundByService,
 				OutboundByService: s.OutboundByService,

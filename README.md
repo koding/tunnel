@@ -3,7 +3,7 @@
 
 Public Internet facing gateway (TCP reverse tunnel) for server.garden.
 
-![](threshold.png)
+![](readme/splash.png)
 
 This project was originally forked from https://github.com/koding/tunnel
 
@@ -13,7 +13,7 @@ This repository only includes the application that does the tunneling part.  It 
 
 See the usage example folder for a basic test.
 
-![Diagram](readme/Diagram.png)
+![Diagram](readme/diagram.png)
 
 ### How it is intended to be used:
 
