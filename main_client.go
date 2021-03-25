@@ -14,6 +14,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -21,17 +22,19 @@ import (
 )
 
 type ClientConfig struct {
-	DebugLog                   bool
-	ClientId                   string
-	MultiTenantSchedulerServer string
-	ServerAddr                 string
-	Servers                    []string
-	ServiceToLocalAddrMap      *map[string]string
-	CaCertificateFilesGlob     string
-	ClientTlsKeyFile           string
-	ClientTlsCertificateFile   string
-	AdminUnixSocket            string
-	Metrics                    MetricsConfig
+	DebugLog                 bool
+	ClientId                 string
+	GreenhouseDomain         string
+	GreenhouseAPIKey         string
+	GreenhouseThresholdPort  int
+	ServerAddr               string
+	Servers                  []string
+	ServiceToLocalAddrMap    *map[string]string
+	CaCertificateFilesGlob   string
+	ClientTlsKeyFile         string
+	ClientTlsCertificateFile string
+	AdminUnixSocket          string
+	Metrics                  MetricsConfig
 }
 
 type ClientServer struct {
@@ -62,6 +65,10 @@ func runClient(configFileName *string) {
 		log.Fatalf("runClient(): can't json.Unmarshal(configBytes, &config) because %s \n", err)
 	}
 
+	if config.GreenhouseThresholdPort == 0 {
+		config.GreenhouseThresholdPort = 9056
+	}
+
 	clientServers = []ClientServer{}
 	makeServer := func(hostPort string) ClientServer {
 		serverURLString := fmt.Sprintf("https://%s", hostPort)
@@ -75,14 +82,56 @@ func runClient(configFileName *string) {
 		}
 	}
 
-	if config.MultiTenantSchedulerServer != "" {
+	if config.GreenhouseDomain != "" {
 		if config.ServerAddr != "" {
-			log.Fatal("config contains both MultiTenantSchedulerServer and ServerAddr, only use one or the other")
+			log.Fatal("config contains both GreenhouseDomain and ServerAddr, only use one or the other")
 		}
 		if config.Servers != nil && len(config.Servers) > 0 {
-			log.Fatal("config contains both MultiTenantSchedulerServer and Servers, only use one or the other")
+			log.Fatal("config contains both GreenhouseDomain and Servers, only use one or the other")
 		}
-		// TODO Grab server host/ports from greenhouse
+		if config.GreenhouseAPIKey == "" {
+			log.Fatal("config contains GreenhouseDomain but does not contain GreenhouseAPIKey, use both or niether")
+		}
+
+		greenhouseClient := http.Client{Timeout: time.Second * 10}
+		greenhouseURL := fmt.Sprintf("https://%s/api/thresholdservers", config.GreenhouseDomain)
+		request, err := http.NewRequest("GET", greenhouseURL, nil)
+		if err != nil {
+			log.Fatal("invalid GreenhouseDomain '%s', can't create http request for %s", config.GreenhouseDomain, greenhouseURL)
+		}
+		request.Header.Add("Authorization", fmt.Sprintf("Bearer %s", config.GreenhouseAPIKey))
+
+		response, err := greenhouseClient.Do(request)
+		if err != nil || response.StatusCode != 200 {
+			if err == nil {
+				if response.StatusCode == 401 {
+					log.Fatalf("bad or expired GreenhouseAPIKey, recieved HTTP 401 Unauthorized from Greenhouse server %s", greenhouseURL)
+				} else {
+					log.Fatalf("server error: recieved HTTP %d from Greenhouse server %s", response.StatusCode, greenhouseURL)
+				}
+			}
+			log.Printf("can't reach %s, falling back to DNS lookup...\n", greenhouseURL)
+			ips, err := net.LookupIP(config.GreenhouseDomain)
+			if err != nil {
+				log.Fatal("Failed to lookup GreenhouseDomain '%s'", config.GreenhouseDomain)
+			}
+			for _, ip := range ips {
+				clientServers = append(clientServers, makeServer(fmt.Sprintf("%s:%d", ip, config.GreenhouseThresholdPort)))
+			}
+		} else {
+			responseBytes, err := ioutil.ReadAll(response.Body)
+			if err != nil {
+				log.Fatal("http read error GET '%s'", greenhouseURL)
+			}
+			var ipPorts []string
+			err = json.Unmarshal(responseBytes, &ipPorts)
+			if err != nil {
+				log.Fatal("http read error GET '%s'", greenhouseURL)
+			}
+			for _, serverHostPort := range ipPorts {
+				clientServers = append(clientServers, makeServer(serverHostPort))
+			}
+		}
 
 	} else if config.Servers != nil && len(config.Servers) > 0 {
 		if config.ServerAddr != "" {
@@ -98,7 +147,16 @@ func runClient(configFileName *string) {
 	serviceToLocalAddrMap = config.ServiceToLocalAddrMap
 
 	configToLog, _ := json.MarshalIndent(config, "", "  ")
-	log.Printf("theshold client is starting up using config:\n%s\n", string(configToLog))
+	configToLogString := string(configToLog)
+
+	configToLogString = regexp.MustCompile(
+		`("GreenhouseAPIKey": ")[^"]+(",)`,
+	).ReplaceAllString(
+		configToLogString,
+		"$1******$2",
+	)
+
+	log.Printf("theshold client is starting up using config:\n%s\n", configToLogString)
 
 	dialFunction := net.Dial
 
