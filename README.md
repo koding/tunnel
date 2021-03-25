@@ -15,6 +15,11 @@ See the usage example folder for a basic test.
 
 ![Diagram](readme/diagram.png)
 
+This diagram was created with https://app.diagrams.net/.
+To edit it, download the <a download href="readme/diagram.drawio">diagram file</a> and edit it with the https://app.diagrams.net/ web application, or you may run the application from [source](https://github.com/jgraph/drawio) if you wish.
+
+
+
 ### How it is intended to be used:
 
 1. An automated tool creates a cloud instance and installs and configures the tunnel server on it. 

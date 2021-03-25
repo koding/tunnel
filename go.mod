@@ -1,4 +1,4 @@
-module git.sequentialread.com/forest/tunnel
+module git.sequentialread.com/forest/threshold
 
 go 1.14
 

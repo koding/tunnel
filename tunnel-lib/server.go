@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"git.sequentialread.com/forest/tunnel/tunnel-lib/proto"
+	"git.sequentialread.com/forest/threshold/tunnel-lib/proto"
 
 	"github.com/hashicorp/yamux"
 )

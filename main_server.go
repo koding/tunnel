@@ -18,7 +18,7 @@ import (
 	"sync"
 	"time"
 
-	tunnel "git.sequentialread.com/forest/tunnel/tunnel-lib"
+	tunnel "git.sequentialread.com/forest/threshold/tunnel-lib"
 )
 
 type ServerConfig struct {
@@ -79,7 +79,8 @@ type PrometheusMetricsAPI struct {
 }
 
 type Tenant struct {
-	ReservedPorts     []int
+	PortStart         int
+	PortEnd           int
 	AuthorizedDomains []string
 }
 
@@ -472,6 +473,7 @@ func (s *MultiTenantInternalAPI) ServeHTTP(responseWriter http.ResponseWriter, r
 					var newTenants map[string]Tenant
 					err = json.Unmarshal(bodyBytes, &newTenants)
 					if err != nil {
+						log.Printf("422 Unprocessable Entity: Can't Parse JSON: %+v\n", err)
 						http.Error(responseWriter, "422 Unprocessable Entity: Can't Parse JSON", http.StatusUnprocessableEntity)
 						return
 					}
@@ -492,7 +494,8 @@ func (s *MultiTenantInternalAPI) ServeHTTP(responseWriter http.ResponseWriter, r
 			responseWriter.Write(bytes)
 
 		} else {
-			responseWriter.Header().Set("Allow", "GET, PUT")
+			responseWriter.Header().Add("Allow", "PUT")
+			responseWriter.Header().Add("Allow", "GET")
 			http.Error(responseWriter, "405 Method Not Allowed, try GET or PUT", http.StatusMethodNotAllowed)
 		}
 	case "/ping":
@@ -599,20 +602,14 @@ func (s *ManagementHttpHandler) ServeHTTP(responseWriter http.ResponseWriter, re
 						}
 
 						if listenerConfig.ListenHostnameGlob == "" {
-							isReservedPort := false
-							for _, tenantReservedPort := range tenant.ReservedPorts {
-								if listenerConfig.ListenPort == tenantReservedPort {
-									isReservedPort = true
-									break
-								}
-							}
+							isReservedPort := (listenerConfig.ListenPort >= tenant.PortStart && listenerConfig.ListenPort <= tenant.PortEnd)
 							if !isReservedPort {
 								http.Error(
 									responseWriter,
 									fmt.Sprintf(
-										"400 Bad Request: ListenHostnameGlob is empty and ListenPort '%d' is not one of your reserved ports [%s]",
+										"400 Bad Request: ListenHostnameGlob is empty and ListenPort '%d' is not one of your reserved ports %d..%d",
 										listenerConfig.ListenPort,
-										strings.Join(intSlice2StringSlice(tenant.ReservedPorts), ", "),
+										tenant.PortStart, tenant.PortEnd,
 									),
 									http.StatusBadRequest,
 								)

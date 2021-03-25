@@ -4,7 +4,7 @@ import (
 	"log"
 	"net"
 
-	"git.sequentialread.com/forest/tunnel/tunnel-lib/proto"
+	"git.sequentialread.com/forest/threshold/tunnel-lib/proto"
 )
 
 // TCPProxy forwards TCP streams.

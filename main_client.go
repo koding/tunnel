@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	tunnel "git.sequentialread.com/forest/tunnel/tunnel-lib"
+	tunnel "git.sequentialread.com/forest/threshold/tunnel-lib"
 )
 
 type ClientConfig struct {
