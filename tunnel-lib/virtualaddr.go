@@ -46,13 +46,20 @@ type vaddrStorage struct {
 	//  ports     map[int]*listener // port-based routing: maps port number to identifier
 	//	ips       map[string]*listener // ip-based routing: maps ip address to identifier
 
+	httpHostRegex *regexp.Regexp
+	dotRegex      *regexp.Regexp
+	globRegex     *regexp.Regexp
+
 	mu sync.RWMutex
 }
 
 func newVirtualAddrs(opts *vaddrOptions) *vaddrStorage {
 	return &vaddrStorage{
-		vaddrOptions: opts,
-		listeners:    make(map[string]*listener),
+		vaddrOptions:  opts,
+		listeners:     make(map[string]*listener),
+		httpHostRegex: regexp.MustCompile("[A-Z]+ [^ ]+ HTTP[^\n]+\n([A-Za-z0-9-]+: [^\n]+\n)*(H|h)ost: ([^\n]+)\n"),
+		dotRegex:      regexp.MustCompile(`\.`),
+		globRegex:     regexp.MustCompile(`\*+`),
 		//      ports:        make(map[int]*listener),
 		//		ips:          make(map[string]*listener),
 	}
@@ -258,7 +265,7 @@ func (vaddr *vaddrStorage) getListenerInfo(conn net.Conn) (*ListenerInfo, string
 
 			//log.Printf("pre getHostnameFromSNI ")
 
-			connectionHeader := make([]byte, 1024)
+			connectionHeader := make([]byte, 4096)
 			n, err := conn.Read(connectionHeader)
 			if err != nil && err != io.EOF {
 				log.Printf("vaddrStorage.getListenerInfo(): failed to read header for connection %q: %s", conn.LocalAddr(), err)
@@ -268,10 +275,16 @@ func (vaddr *vaddrStorage) getListenerInfo(conn net.Conn) (*ListenerInfo, string
 			hostname, err := getHostnameFromSNI(connectionHeader[:n])
 
 			// This will happen every time someone connects with a non-TLS protocol.
-			// Its not a big deal, we can ignore it.
-			// if err != nil {
-			// 	log.Printf("vaddrStorage.getListenerInfo(): failed to get SNI for connection %q: %s\n", conn.LocalAddr(), err)
-			// }
+			if err != nil {
+				submatches := vaddr.httpHostRegex.FindSubmatch(connectionHeader[:n])
+				//log.Printf("--\n%d\n--\n", len(submatches))
+				if submatches != nil && len(submatches) == 4 {
+					//log.Printf("---\n\n%s\n\n%s\n\n%s\n\n---\n", string(submatches[1]), string(submatches[2]), string(submatches[3]))
+					// Trim any space or port number that might be on the host
+					split := strings.Split(strings.TrimSpace(string(submatches[3])), ":")
+					hostname = split[0]
+				}
+			}
 
 			//log.Printf("getHostnameFromSNI: %s\n", hostname)
 
@@ -282,9 +295,10 @@ func (vaddr *vaddrStorage) getListenerInfo(conn net.Conn) (*ListenerInfo, string
 				if globToUse == "" {
 					globToUse = "*"
 				}
-				numberOfPeriods := len(regexp.MustCompile(`\.`).FindAllString(globToUse, -1))
-				numberOfGlobs := len(regexp.MustCompile(`\*+`).FindAllString(globToUse, -1))
+				numberOfPeriods := len(vaddr.dotRegex.FindAllString(globToUse, -1))
+				numberOfGlobs := len(vaddr.globRegex.FindAllString(globToUse, -1))
 				specificity := numberOfPeriods - numberOfGlobs
+				//log.Printf("%d > %d && Glob(%s, %s) (%t)\n", specificity, recordSpecificity, globToUse, hostname, Glob(globToUse, hostname))
 				if specificity > recordSpecificity && Glob(globToUse, hostname) {
 					recordSpecificity = specificity
 					mostSpecificMatchingBackend = &backend

@@ -113,7 +113,7 @@ func runClient(configFileName *string) {
 			log.Printf("can't reach %s, falling back to DNS lookup...\n", greenhouseURL)
 			ips, err := net.LookupIP(config.GreenhouseDomain)
 			if err != nil {
-				log.Fatal("Failed to lookup GreenhouseDomain '%s'", config.GreenhouseDomain)
+				log.Fatalf("Failed to lookup GreenhouseDomain '%s'", config.GreenhouseDomain)
 			}
 			for _, ip := range ips {
 				clientServers = append(clientServers, makeServer(fmt.Sprintf("%s:%d", ip, config.GreenhouseThresholdPort)))
@@ -165,7 +165,15 @@ func runClient(configFileName *string) {
 		log.Fatal(err)
 	}
 
-	commonName := cert.Leaf.Subject.CommonName
+	parsedCert, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if parsedCert == nil {
+		log.Fatalf("parsedCert is nil (%s)", config.ClientTlsCertificateFile)
+	}
+	commonName := parsedCert.Subject.CommonName
 	clientIdDomain := strings.Split(commonName, "@")
 
 	if len(clientIdDomain) != 2 {
@@ -253,6 +261,9 @@ func runClient(configFileName *string) {
 	}
 
 	log.Print("runClient(): the client should be running now\n")
+
+	blockForever := make(chan int)
+	<-blockForever
 }
 
 func runClientAdminApi(config ClientConfig) {

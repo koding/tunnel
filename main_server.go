@@ -107,6 +107,7 @@ func runServer(configFileName *string) {
 	log.Printf("threshold server is starting up using config:\n%s\n", string(configToLog))
 
 	clientStateChangeChannel := make(chan *tunnel.ClientStateChange)
+	listenersByTenant = map[string][]ListenerConfig{}
 
 	var metricChannel chan tunnel.BandwidthMetric = nil
 
@@ -119,6 +120,7 @@ func runServer(configFileName *string) {
 	tunnelServerConfig := &tunnel.ServerConfig{
 		StateChanges:        clientStateChangeChannel,
 		ValidateCertificate: validateCertificate,
+		MultitenantMode:     config.MultiTenantMode,
 		Bandwidth:           metricChannel,
 		Domain:              config.Domain,
 		DebugLog:            config.DebugLog,
@@ -580,6 +582,7 @@ func (s *ManagementHttpHandler) ServeHTTP(responseWriter http.ResponseWriter, re
 								fmt.Sprintf("400 Bad Request: unknown tenantId '%s'", tenantIdNodeId[0]),
 								http.StatusBadRequest,
 							)
+							return
 						}
 						isAuthorizedDomain := false
 						for _, tenantAuthorizedDomain := range tenant.AuthorizedDomains {
@@ -593,7 +596,8 @@ func (s *ManagementHttpHandler) ServeHTTP(responseWriter http.ResponseWriter, re
 							http.Error(
 								responseWriter,
 								fmt.Sprintf(
-									"400 Bad Request: ListenHostnameGlob '%s' is not covered by any of your authorized domains [%s]",
+									`400 Bad Request: ListenHostnameGlob '%s' is not covered by any of your authorized domains [%s]. 
+									If you are trying to use a reserved port, leave ListenHostnameGlob blank.`,
 									listenerConfig.ListenHostnameGlob,
 									strings.Join(stringSliceMap(tenant.AuthorizedDomains, func(x string) string { return fmt.Sprintf("'%s'", x) }), ", "),
 								),

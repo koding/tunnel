@@ -73,8 +73,10 @@ type Server struct {
 
 	bandwidth chan<- BandwidthMetric
 
+	multitenantMode bool
+
 	// see ServerConfig.ValidateCertificate comment
-	validateCertificate func(domain string, request *http.Request) (identifier string, tenantId string, err error)
+	validateCertificate func(domain string, multitenantMode bool, request *http.Request) (identifier string, tenantId string, err error)
 
 	// yamuxConfig is passed to new yamux.Session's
 	yamuxConfig *yamux.Config
@@ -116,6 +118,8 @@ type ServerConfig struct {
 	// the tenantId it returns will be `<tenantId>` or ""
 	ValidateCertificate func(domain string, multiTenantMode bool, request *http.Request) (identifier string, tenantId string, err error)
 
+	MultitenantMode bool
+
 	// YamuxConfig defines the config which passed to every new yamux.Session. If nil
 	// yamux.DefaultConfig() is used.
 	YamuxConfig *yamux.Config
@@ -146,6 +150,8 @@ func NewServer(cfg *ServerConfig) (*Server, error) {
 		virtualAddrs:          newVirtualAddrs(opts),
 		controls:              newControls(),
 		states:                make(map[string]ClientState),
+		multitenantMode:       cfg.MultitenantMode,
+		validateCertificate:   cfg.ValidateCertificate,
 		bandwidth:             cfg.Bandwidth,
 		stateCh:               cfg.StateChanges,
 		domain:                cfg.Domain,
@@ -166,7 +172,9 @@ func (s *Server) ServeHTTP(responseWriter http.ResponseWriter, request *http.Req
 	// going to infer and call the respective path handlers.
 	switch fmt.Sprintf("%s/", path.Clean(request.URL.Path)) {
 	case proto.ControlPath:
-		s.checkConnect(s.controlHandler).ServeHTTP(responseWriter, request)
+		s.checkConnect(func(w http.ResponseWriter, r *http.Request) error {
+			return s.controlHandler(w, r)
+		}).ServeHTTP(responseWriter, request)
 	case "/ping/":
 		if request.Method == "GET" {
 			fmt.Fprint(responseWriter, "pong!")
@@ -391,7 +399,7 @@ func (s *Server) dial(identifier string, service string) (net.Conn, error) {
 // tunnel TCP connections.
 func (s *Server) controlHandler(w http.ResponseWriter, r *http.Request) (ctErr error) {
 
-	clientId, tenantId, err := s.validateCertificate(s.domain, r)
+	clientId, tenantId, err := s.validateCertificate(s.domain, s.multitenantMode, r)
 	fmt.Println(tenantId)
 	if err != nil {
 		return err
@@ -694,6 +702,7 @@ func copyHeader(dst, src http.Header) {
 
 // checkConnect checks whether the incoming request is HTTP CONNECT method.
 func (s *Server) checkConnect(fn func(w http.ResponseWriter, r *http.Request) error) http.Handler {
+	server := s
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "CONNECT" {
 			http.Error(w, "405 must CONNECT\n", http.StatusMethodNotAllowed)
@@ -703,9 +712,9 @@ func (s *Server) checkConnect(fn func(w http.ResponseWriter, r *http.Request) er
 		if err := fn(w, r); err != nil {
 			log.Printf("Server.checkConnect(): Handler err: %v\n", err.Error())
 
-			identifier, _, err := s.validateCertificate(s.domain, r)
+			identifier, _, err := server.validateCertificate(server.domain, server.multitenantMode, r)
 			if err == nil {
-				s.onDisconnect(identifier, err)
+				server.onDisconnect(identifier, err)
 			}
 
 			http.Error(w, err.Error(), 502)
