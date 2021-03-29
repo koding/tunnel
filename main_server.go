@@ -16,7 +16,6 @@ import (
 	"regexp"
 	"strings"
 	"sync"
-	"time"
 
 	tunnel "git.sequentialread.com/forest/threshold/tunnel-lib"
 )
@@ -68,7 +67,10 @@ type BandwidthCounter struct {
 	Outbound int64
 }
 
-type MultiTenantInternalAPI struct{}
+type MultiTenantInternalAPI struct {
+	InboundByTenant  map[string]int64
+	OutboundByTenant map[string]int64
+}
 
 type PrometheusMetricsAPI struct {
 	MultiTenantServerMode bool
@@ -114,7 +116,6 @@ func runServer(configFileName *string) {
 	// the Server should only collect metrics when in multi-tenant mode -- this is needed for billing
 	if config.MultiTenantMode {
 		metricChannel = make(chan tunnel.BandwidthMetric)
-		go exportMetrics(config.Metrics /*multiTenantServerMode: */, true, metricChannel)
 	}
 
 	tunnelServerConfig := &tunnel.ServerConfig{
@@ -215,11 +216,30 @@ func runServer(configFileName *string) {
 			}
 			tlsConfig.BuildNameToCertificate()
 
+			internalHandler := &MultiTenantInternalAPI{
+				InboundByTenant:  map[string]int64{},
+				OutboundByTenant: map[string]int64{},
+			}
 			multiTenantInternalServer := &http.Server{
 				Addr:      fmt.Sprintf(":%d", config.MultiTenantInternalAPIListenPort),
 				TLSConfig: tlsConfig,
-				Handler:   &MultiTenantInternalAPI{},
+				Handler:   internalHandler,
 			}
+
+			go (func() {
+				for {
+					metric := <-metricChannel
+					tenantIdNodeId := strings.Split(metric.ClientId, ".")
+					if len(tenantIdNodeId) != 2 {
+						panic(fmt.Errorf("malformed metric.ClientId '%s', expected <tenantId>.<nodeId>", metric.ClientId))
+					}
+					if metric.Inbound {
+						internalHandler.InboundByTenant[tenantIdNodeId[0]] += int64(metric.Bytes)
+					} else {
+						internalHandler.OutboundByTenant[tenantIdNodeId[0]] += int64(metric.Bytes)
+					}
+				}
+			})()
 
 			err = multiTenantInternalServer.ListenAndServeTLS(config.ServerTlsCertificateFile, config.ServerTlsKeyFile)
 			panic(err)
@@ -353,102 +373,103 @@ func setListeners(tenantId string, listenerConfigs []ListenerConfig) (int, strin
 
 }
 
-func exportMetrics(config MetricsConfig, multiTenantServerMode bool, bandwidth <-chan tunnel.BandwidthMetric) {
-	metricsAPI := &PrometheusMetricsAPI{
-		MultiTenantServerMode: multiTenantServerMode,
-		InboundByTenant:       map[string]int64{},
-		OutboundByTenant:      map[string]int64{},
-		InboundByService:      map[string]int64{},
-		OutboundByService:     map[string]int64{},
-	}
+// TODO move the prometheus metrics to the client
+// func exportMetrics(config MetricsConfig, multiTenantServerMode bool, bandwidth <-chan tunnel.BandwidthMetric) {
+// 	metricsAPI := &PrometheusMetricsAPI{
+// 		MultiTenantServerMode: multiTenantServerMode,
+// 		InboundByTenant:       map[string]int64{},
+// 		OutboundByTenant:      map[string]int64{},
+// 		InboundByService:      map[string]int64{},
+// 		OutboundByService:     map[string]int64{},
+// 	}
 
-	go (func() {
-		for {
-			metric := <-bandwidth
-			if multiTenantServerMode {
-				tenantIdNodeId := strings.Split(metric.ClientId, ".")
-				if len(tenantIdNodeId) != 2 {
-					panic(fmt.Errorf("malformed metric.ClientId '%s', expected <tenantId>.<nodeId>", metric.ClientId))
-				}
-				if metric.Inbound {
-					metricsAPI.InboundByTenant[tenantIdNodeId[0]] += int64(metric.Bytes)
-				} else {
-					metricsAPI.OutboundByTenant[tenantIdNodeId[0]] += int64(metric.Bytes)
-				}
-			} else {
-				// TODO shouldn't this be done on the client side only ??
-				if metric.Inbound {
-					metricsAPI.InboundByService[metric.Service] += int64(metric.Bytes)
-				} else {
-					metricsAPI.OutboundByService[metric.Service] += int64(metric.Bytes)
-				}
-			}
-		}
-	})()
+// 	go (func() {
+// 		for {
+// 			metric := <-bandwidth
+// 			if multiTenantServerMode {
+// 				tenantIdNodeId := strings.Split(metric.ClientId, ".")
+// 				if len(tenantIdNodeId) != 2 {
+// 					panic(fmt.Errorf("malformed metric.ClientId '%s', expected <tenantId>.<nodeId>", metric.ClientId))
+// 				}
+// 				if metric.Inbound {
+// 					metricsAPI.InboundByTenant[tenantIdNodeId[0]] += int64(metric.Bytes)
+// 				} else {
+// 					metricsAPI.OutboundByTenant[tenantIdNodeId[0]] += int64(metric.Bytes)
+// 				}
+// 			} else {
+// 				// TODO shouldn't this be done on the client side only ??
+// 				if metric.Inbound {
+// 					metricsAPI.InboundByService[metric.Service] += int64(metric.Bytes)
+// 				} else {
+// 					metricsAPI.OutboundByService[metric.Service] += int64(metric.Bytes)
+// 				}
+// 			}
+// 		}
+// 	})()
 
-	go (func() {
-		metricsServer := &http.Server{
-			Addr:    fmt.Sprintf(":%d", config.PrometheusMetricsAPIPort),
-			Handler: metricsAPI,
-		}
-		err := metricsServer.ListenAndServe()
-		panic(err)
-	})()
-}
+// 	go (func() {
+// 		metricsServer := &http.Server{
+// 			Addr:    fmt.Sprintf(":%d", config.PrometheusMetricsAPIPort),
+// 			Handler: metricsAPI,
+// 		}
+// 		err := metricsServer.ListenAndServe()
+// 		panic(err)
+// 	})()
+// }
 
-// TODO move this to the management API / to the client side.
-func (s *PrometheusMetricsAPI) ServeHTTP(responseWriter http.ResponseWriter, request *http.Request) {
+// // TODO move this to the management API / to the client side.
+// func (s *PrometheusMetricsAPI) ServeHTTP(responseWriter http.ResponseWriter, request *http.Request) {
 
-	getMillisecondsSinceUnixEpoch := func() int64 {
-		return time.Now().UnixNano() / int64(time.Millisecond)
-	}
+// 	getMillisecondsSinceUnixEpoch := func() int64 {
+// 		return time.Now().UnixNano() / int64(time.Millisecond)
+// 	}
 
-	writeMetric := func(inbound map[string]int64, outbound map[string]int64, name, tag, desc string) {
-		timestamp := getMillisecondsSinceUnixEpoch()
-		responseWriter.Write([]byte(fmt.Sprintf("# HELP %s %s\n", name, desc)))
-		responseWriter.Write([]byte(fmt.Sprintf("# TYPE %s counter\n", name)))
-		for id, bytez := range inbound {
-			responseWriter.Write([]byte(fmt.Sprintf("%s{%s=\"%s\",direction=\"inbound\"} %d %d\n", name, tag, id, bytez, timestamp)))
-		}
-		for id, bytez := range outbound {
-			responseWriter.Write([]byte(fmt.Sprintf("%s{%s=\"%s\",direction=\"outbound\"} %d %d\n", name, tag, id, bytez, timestamp)))
-		}
-	}
+// 	writeMetric := func(inbound map[string]int64, outbound map[string]int64, name, tag, desc string) {
+// 		timestamp := getMillisecondsSinceUnixEpoch()
+// 		responseWriter.Write([]byte(fmt.Sprintf("# HELP %s %s\n", name, desc)))
+// 		responseWriter.Write([]byte(fmt.Sprintf("# TYPE %s counter\n", name)))
+// 		for id, bytez := range inbound {
+// 			responseWriter.Write([]byte(fmt.Sprintf("%s{%s=\"%s\",direction=\"inbound\"} %d %d\n", name, tag, id, bytez, timestamp)))
+// 		}
+// 		for id, bytez := range outbound {
+// 			responseWriter.Write([]byte(fmt.Sprintf("%s{%s=\"%s\",direction=\"outbound\"} %d %d\n", name, tag, id, bytez, timestamp)))
+// 		}
+// 	}
 
-	if strings.Contains(request.Header.Get("Accept"), "application/json") && !strings.Contains(request.Header.Get("Accept"), "text/plain") {
-		var bytez []byte
-		var err error
-		if s.MultiTenantServerMode {
-			bytez, err = json.MarshalIndent(PrometheusMetricsAPI{
-				InboundByTenant:  s.InboundByTenant,
-				OutboundByTenant: s.OutboundByTenant,
-			}, "", "  ")
-		} else {
-			// TODO this should probably only be supported on the client side
-			bytez, err = json.MarshalIndent(PrometheusMetricsAPI{
-				InboundByService:  s.InboundByService,
-				OutboundByService: s.OutboundByService,
-			}, "", "  ")
-		}
+// 	if strings.Contains(request.Header.Get("Accept"), "application/json") && !strings.Contains(request.Header.Get("Accept"), "text/plain") {
+// 		var bytez []byte
+// 		var err error
+// 		if s.MultiTenantServerMode {
+// 			bytez, err = json.MarshalIndent(PrometheusMetricsAPI{
+// 				InboundByTenant:  s.InboundByTenant,
+// 				OutboundByTenant: s.OutboundByTenant,
+// 			}, "", "  ")
+// 		} else {
+// 			// TODO this should probably only be supported on the client side
+// 			bytez, err = json.MarshalIndent(PrometheusMetricsAPI{
+// 				InboundByService:  s.InboundByService,
+// 				OutboundByService: s.OutboundByService,
+// 			}, "", "  ")
+// 		}
 
-		if err != nil {
-			log.Printf(fmt.Sprintf("500 internal server error: %s", err))
-			http.Error(responseWriter, "500 internal server error", http.StatusInternalServerError)
-			return
-		}
+// 		if err != nil {
+// 			log.Printf(fmt.Sprintf("500 internal server error: %s", err))
+// 			http.Error(responseWriter, "500 internal server error", http.StatusInternalServerError)
+// 			return
+// 		}
 
-		responseWriter.Header().Set("Content-Type", "application/json")
-		responseWriter.Write(bytez)
-	} else {
-		responseWriter.Header().Set("Content-Type", "text/plain; version=0.0.4")
+// 		responseWriter.Header().Set("Content-Type", "application/json")
+// 		responseWriter.Write(bytez)
+// 	} else {
+// 		responseWriter.Header().Set("Content-Type", "text/plain; version=0.0.4")
 
-		if s.MultiTenantServerMode {
-			writeMetric(s.InboundByTenant, s.OutboundByTenant, "bandwidth_by_tenant", "tenant", "bandwidth usage by tenant in bytes, excluding usage from control protocol.")
-		} else {
-			writeMetric(s.InboundByService, s.OutboundByService, "bandwidth_by_service", "service", "bandwidth usage by service in bytes.")
-		}
-	}
-}
+// 		if s.MultiTenantServerMode {
+// 			writeMetric(s.InboundByTenant, s.OutboundByTenant, "bandwidth_by_tenant", "tenant", "bandwidth usage by tenant in bytes, excluding usage from control protocol.")
+// 		} else {
+// 			writeMetric(s.InboundByService, s.OutboundByService, "bandwidth_by_service", "service", "bandwidth usage by service in bytes.")
+// 		}
+// 	}
+// }
 
 func compareListenerConfigs(a, b ListenerConfig) bool {
 	return (a.ListenPort == b.ListenPort &&
@@ -499,6 +520,40 @@ func (s *MultiTenantInternalAPI) ServeHTTP(responseWriter http.ResponseWriter, r
 			responseWriter.Header().Add("Allow", "PUT")
 			responseWriter.Header().Add("Allow", "GET")
 			http.Error(responseWriter, "405 Method Not Allowed, try GET or PUT", http.StatusMethodNotAllowed)
+		}
+	case "/consumeMetrics":
+		if request.Method == "GET" {
+			bytez, err := json.Marshal(struct {
+				InboundByTenant  map[string]int64
+				OutboundByTenant map[string]int64
+			}{
+				InboundByTenant:  s.InboundByTenant,
+				OutboundByTenant: s.OutboundByTenant,
+			})
+			if err != nil {
+				http.Error(responseWriter, "500 JSON Marshal Error", http.StatusInternalServerError)
+				return
+			}
+			inboundToDelete := []string{}
+			outboundToDelete := []string{}
+			for k := range s.InboundByTenant {
+				inboundToDelete = append(inboundToDelete, k)
+			}
+			for k := range s.OutboundByTenant {
+				outboundToDelete = append(outboundToDelete, k)
+			}
+			for _, k := range inboundToDelete {
+				delete(s.InboundByTenant, k)
+			}
+			for _, k := range outboundToDelete {
+				delete(s.OutboundByTenant, k)
+			}
+
+			responseWriter.Header().Set("Content-Type", "application/json")
+			responseWriter.Write(bytez)
+		} else {
+			responseWriter.Header().Set("Allow", "GET")
+			http.Error(responseWriter, "405 method not allowed, try GET", http.StatusMethodNotAllowed)
 		}
 	case "/ping":
 		if request.Method == "GET" {
