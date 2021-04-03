@@ -33,6 +33,9 @@ type ClientConfig struct {
 	CaCertificateFilesGlob   string
 	ClientTlsKeyFile         string
 	ClientTlsCertificateFile string
+	CaCertificate            string
+	ClientTlsKey             string
+	ClientTlsCertificate     string
 	AdminUnixSocket          string
 	Metrics                  MetricsConfig
 }
@@ -144,7 +147,11 @@ func runClient(configFileName *string) {
 		clientServers = []ClientServer{makeServer(config.ServerAddr)}
 	}
 
-	serviceToLocalAddrMap = config.ServiceToLocalAddrMap
+	if config.ServiceToLocalAddrMap != nil {
+		serviceToLocalAddrMap = config.ServiceToLocalAddrMap
+	} else {
+		serviceToLocalAddrMap = &(map[string]string{})
+	}
 
 	configToLog, _ := json.MarshalIndent(config, "", "  ")
 	configToLogString := string(configToLog)
@@ -160,9 +167,21 @@ func runClient(configFileName *string) {
 
 	dialFunction := net.Dial
 
-	cert, err := tls.LoadX509KeyPair(config.ClientTlsCertificateFile, config.ClientTlsKeyFile)
-	if err != nil {
-		log.Fatal(err)
+	var cert tls.Certificate
+	hasFiles := config.ClientTlsCertificateFile != "" && config.ClientTlsKeyFile != ""
+	hasLiterals := config.ClientTlsCertificate != "" && config.ClientTlsKey != ""
+	if hasFiles && !hasLiterals {
+		cert, err = tls.LoadX509KeyPair(config.ClientTlsCertificateFile, config.ClientTlsKeyFile)
+		if err != nil {
+			log.Fatal(err)
+		}
+	} else if !hasFiles && hasLiterals {
+		cert, err = tls.X509KeyPair([]byte(config.ClientTlsCertificate), []byte(config.ClientTlsKeyFile))
+		if err != nil {
+			log.Fatal(err)
+		}
+	} else {
+		log.Fatal("one or the other (not both) of ClientTlsCertificateFile+ClientTlsKeyFile or ClientTlsCertificate+ClientTlsKey is required\n")
 	}
 
 	parsedCert, err := x509.ParseCertificate(cert.Certificate[0])
@@ -198,18 +217,30 @@ func runClient(configFileName *string) {
 		))
 	}
 
-	certificates, err := filepath.Glob(config.CaCertificateFilesGlob)
-	if err != nil {
-		log.Fatal(err)
-	}
-
 	caCertPool := x509.NewCertPool()
-	for _, filename := range certificates {
-		caCert, err := ioutil.ReadFile(filename)
+	if config.CaCertificateFilesGlob != "" && config.CaCertificate == "" {
+		certificates, err := filepath.Glob(config.CaCertificateFilesGlob)
 		if err != nil {
 			log.Fatal(err)
 		}
-		caCertPool.AppendCertsFromPEM(caCert)
+
+		for _, filename := range certificates {
+			caCert, err := ioutil.ReadFile(filename)
+			if err != nil {
+				log.Fatal(err)
+			}
+			ok := caCertPool.AppendCertsFromPEM(caCert)
+			if !ok {
+				log.Fatalf("Failed to add CA certificate '%s' to cert pool\n", filename)
+			}
+		}
+	} else if config.CaCertificateFilesGlob == "" && config.CaCertificate != "" {
+		ok := caCertPool.AppendCertsFromPEM([]byte(config.CaCertificate))
+		if !ok {
+			log.Fatal("Failed to add config.CaCertificate to cert pool\n")
+		}
+	} else {
+		log.Fatal("one or the other (not both) of CaCertificateFilesGlob or CaCertificate is required\n")
 	}
 
 	tlsClientConfig = &tls.Config{
@@ -364,7 +395,9 @@ func (handler clientAdminAPI) ServeHTTP(response http.ResponseWriter, request *h
 				}
 			}
 
-			serviceToLocalAddrMap = &configUpdate.ServiceToLocalAddrMap
+			if &configUpdate.ServiceToLocalAddrMap != nil {
+				serviceToLocalAddrMap = &configUpdate.ServiceToLocalAddrMap
+			}
 
 			response.Header().Add("content-type", "application/json")
 			response.WriteHeader(http.StatusOK)

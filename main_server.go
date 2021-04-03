@@ -549,6 +549,15 @@ func (s *MultiTenantInternalAPI) ServeHTTP(responseWriter http.ResponseWriter, r
 				delete(s.OutboundByTenant, k)
 			}
 
+			// bytez2, err := json.Marshal(struct {
+			// 	InboundByTenant  map[string]int64
+			// 	OutboundByTenant map[string]int64
+			// }{
+			// 	InboundByTenant:  s.InboundByTenant,
+			// 	OutboundByTenant: s.OutboundByTenant,
+			// })
+			//log.Printf("returnedBytes: %s\n\ncurrentBytes: %s\n\n", string(bytez), string(bytez2))
+
 			responseWriter.Header().Set("Content-Type", "application/json")
 			responseWriter.Write(bytez)
 		} else {
