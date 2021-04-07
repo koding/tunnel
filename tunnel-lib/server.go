@@ -188,11 +188,13 @@ func (s *Server) ServeHTTP(responseWriter http.ResponseWriter, request *http.Req
 
 func (s *Server) serveTCP() {
 	for conn := range s.connCh {
+		log.Println(3)
 		go s.serveTCPConn(conn)
 	}
 }
 
 func (s *Server) serveTCPConn(conn net.Conn) {
+	log.Println(4)
 	err := s.handleTCPConn(conn)
 	if err != nil {
 		log.Printf("Server.serveTCPConn(): failed to serve %q: %s\n", conn.RemoteAddr(), err)
@@ -203,7 +205,10 @@ func (s *Server) serveTCPConn(conn net.Conn) {
 func (s *Server) handleTCPConn(conn net.Conn) error {
 	// TODO getListenerInfo should return the bytes we read to try to get teh hostname
 	// then we stream.write those right after the SendProxyProtocolv1 bit.
+
+	log.Println(5)
 	listenerInfo, sniHostname, connectionHeader := s.virtualAddrs.getListenerInfo(conn)
+	log.Println(6)
 	if listenerInfo == nil {
 		return fmt.Errorf("no virtual host available for %s (hostname: %s)", conn.LocalAddr(), sniHostname)
 	}
@@ -217,7 +222,9 @@ func (s *Server) handleTCPConn(conn net.Conn) error {
 	if listenerInfo.BackendService != "" {
 		service = listenerInfo.BackendService
 	}
+	log.Println(7)
 	stream, err := s.dial(listenerInfo.AssociatedClientId, service)
+	log.Println(8)
 	if err != nil {
 		return err
 	}
@@ -239,9 +246,11 @@ func (s *Server) handleTCPConn(conn net.Conn) error {
 		stream.Write([]byte(fmt.Sprintf("PROXY %s %s %s %s %s\r\n", proxyNetwork, remoteHost, localHost, remotePort, localPort)))
 	}
 
+	log.Println(9)
 	if len(connectionHeader) > 0 {
 		stream.Write(connectionHeader)
 	}
+	log.Println(10)
 
 	disconnectedChan := make(chan bool)
 
@@ -263,6 +272,7 @@ func (s *Server) handleTCPConn(conn net.Conn) error {
 
 	// Once one member of this conversation has disconnected, we should end the conversation for all parties.
 	<-disconnectedChan
+	log.Println(11)
 
 	return nonil(stream.Close(), conn.Close())
 }

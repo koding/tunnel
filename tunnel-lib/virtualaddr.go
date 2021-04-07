@@ -72,13 +72,13 @@ func (l *listener) serve() {
 			log.Printf("listener.serve(): failue listening on %q: %s\n", l.Addr(), err)
 			return
 		}
-
+		log.Println(1)
 		if atomic.LoadInt32(&l.done) != 0 {
 			log.Printf("listener.serve(): stopped serving %q", l.Addr())
 			conn.Close()
 			return
 		}
-
+		log.Println(2)
 		l.connCh <- conn
 	}
 }
@@ -238,14 +238,36 @@ func (vaddr *vaddrStorage) HasIdentifier(identifier string) bool {
 }
 
 func (vaddr *vaddrStorage) getListenerInfo(conn net.Conn) (*ListenerInfo, string, []byte) {
-	vaddr.mu.Lock()
-	defer vaddr.mu.Unlock()
+	connectionHeader := make([]byte, 4096)
+	n, err := conn.Read(connectionHeader)
+	if err != nil && err != io.EOF {
+		log.Printf("vaddrStorage.getListenerInfo(): failed to read header for connection %q: %s", conn.LocalAddr(), err)
+		return nil, "", make([]byte, 0)
+	}
+
+	hostname, err := getHostnameFromSNI(connectionHeader[:n])
+
+	if err != nil {
+		// If we failed to get the hostname from SNI, try to get it from HTTP/1.1
+
+		submatches := vaddr.httpHostRegex.FindSubmatch(connectionHeader[:n])
+		//log.Printf("--\n%d\n--\n", len(submatches))
+		if submatches != nil && len(submatches) == 4 {
+			//log.Printf("---\n\n%s\n\n%s\n\n%s\n\n---\n", string(submatches[1]), string(submatches[2]), string(submatches[3]))
+			// Trim any space or port number that might be on the host
+			split := strings.Split(strings.TrimSpace(string(submatches[3])), ":")
+			hostname = split[0]
+		}
+	}
 
 	host, port, err := parseHostPort(conn.LocalAddr().String())
 	if err != nil {
 		log.Printf("vaddrStorage.getListenerInfo(): failed to get identifier for connection %q: %s", conn.LocalAddr(), err)
 		return nil, "", make([]byte, 0)
 	}
+
+	vaddr.mu.Lock()
+	defer vaddr.mu.Unlock()
 
 	for _, listener := range vaddr.listeners {
 		listenerHost, listenerPort, err := parseHostPort(listener.localAddr())
@@ -262,31 +284,6 @@ func (vaddr *vaddrStorage) getListenerInfo(conn net.Conn) (*ListenerInfo, string
 		listenPortMatches := listenerPort == port
 
 		if err == nil && listenHostMatches && listenPortMatches {
-
-			//log.Printf("pre getHostnameFromSNI ")
-
-			connectionHeader := make([]byte, 4096)
-			n, err := conn.Read(connectionHeader)
-			if err != nil && err != io.EOF {
-				log.Printf("vaddrStorage.getListenerInfo(): failed to read header for connection %q: %s", conn.LocalAddr(), err)
-				return nil, "", make([]byte, 0)
-			}
-
-			hostname, err := getHostnameFromSNI(connectionHeader[:n])
-
-			// This will happen every time someone connects with a non-TLS protocol.
-			if err != nil {
-				submatches := vaddr.httpHostRegex.FindSubmatch(connectionHeader[:n])
-				//log.Printf("--\n%d\n--\n", len(submatches))
-				if submatches != nil && len(submatches) == 4 {
-					//log.Printf("---\n\n%s\n\n%s\n\n%s\n\n---\n", string(submatches[1]), string(submatches[2]), string(submatches[3]))
-					// Trim any space or port number that might be on the host
-					split := strings.Split(strings.TrimSpace(string(submatches[3])), ":")
-					hostname = split[0]
-				}
-			}
-
-			//log.Printf("getHostnameFromSNI: %s\n", hostname)
 
 			recordSpecificity := -10
 			var mostSpecificMatchingBackend *ListenerInfo = nil
