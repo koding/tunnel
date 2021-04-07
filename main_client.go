@@ -22,22 +22,26 @@ import (
 )
 
 type ClientConfig struct {
-	DebugLog                 bool
-	ClientId                 string
-	GreenhouseDomain         string
-	GreenhouseAPIKey         string
-	GreenhouseThresholdPort  int
-	ServerAddr               string
-	Servers                  []string
-	ServiceToLocalAddrMap    *map[string]string
-	CaCertificateFilesGlob   string
-	ClientTlsKeyFile         string
-	ClientTlsCertificateFile string
-	CaCertificate            string
-	ClientTlsKey             string
-	ClientTlsCertificate     string
-	AdminUnixSocket          string
-	Metrics                  MetricsConfig
+	DebugLog                   bool
+	ClientId                   string
+	GreenhouseDomain           string
+	GreenhouseAPIKey           string
+	GreenhouseThresholdPort    int
+	ServerAddr                 string
+	Servers                    []string
+	ServiceToLocalAddrMap      *map[string]string
+	CaCertificateFilesGlob     string
+	ClientTlsKeyFile           string
+	ClientTlsCertificateFile   string
+	CaCertificate              string
+	ClientTlsKey               string
+	ClientTlsCertificate       string
+	AdminUnixSocket            string
+	AdminAPIPort               int
+	AdminAPICACertificateFile  string
+	AdminAPITlsKeyFile         string
+	AdminAPITlsCertificateFile string
+	Metrics                    MetricsConfig
 }
 
 type ClientServer struct {
@@ -173,12 +177,13 @@ func runClient(configFileName *string) {
 	if hasFiles && !hasLiterals {
 		cert, err = tls.LoadX509KeyPair(config.ClientTlsCertificateFile, config.ClientTlsKeyFile)
 		if err != nil {
-			log.Fatal(err)
+			log.Fatal(fmt.Sprintf("can't start because tls.LoadX509KeyPair returned: \n%+v\n", err))
 		}
 	} else if !hasFiles && hasLiterals {
-		cert, err = tls.X509KeyPair([]byte(config.ClientTlsCertificate), []byte(config.ClientTlsKeyFile))
+
+		cert, err = tls.X509KeyPair([]byte(config.ClientTlsCertificate), []byte(config.ClientTlsKey))
 		if err != nil {
-			log.Fatal(err)
+			log.Fatal(fmt.Sprintf("can't start because tls.X509KeyPair returned: \n%+v\n", err))
 		}
 	} else {
 		log.Fatal("one or the other (not both) of ClientTlsCertificateFile+ClientTlsKeyFile or ClientTlsCertificate+ClientTlsKey is required\n")
@@ -259,7 +264,7 @@ func runClient(configFileName *string) {
 		//log.Printf("(*serviceToLocalAddrMap): %+v\n\n", (*serviceToLocalAddrMap))
 		localAddr, hasLocalAddr := (*serviceToLocalAddrMap)[service]
 		if !hasLocalAddr {
-			return "", fmt.Errorf("service '%s' not configured. Set ServiceToLocalAddrMap in client config file or HTTP PUT /liveconfig over the AdminUnixSocket.", service)
+			return "", fmt.Errorf("service '%s' not configured. Set ServiceToLocalAddrMap in client config file or HTTP PUT /liveconfig over the admin api.", service)
 		}
 		return localAddr, nil
 	}
@@ -299,19 +304,61 @@ func runClient(configFileName *string) {
 
 func runClientAdminApi(config ClientConfig) {
 
-	os.Remove(config.AdminUnixSocket)
+	var listener net.Listener
+	if config.AdminUnixSocket != "" && config.AdminAPIPort == 0 {
+		os.Remove(config.AdminUnixSocket)
 
-	listenAddress, err := net.ResolveUnixAddr("unix", config.AdminUnixSocket)
-	if err != nil {
-		panic(fmt.Sprintf("runClient(): can't start because net.ResolveUnixAddr() returned %+v", err))
-	}
+		listenAddress, err := net.ResolveUnixAddr("unix", config.AdminUnixSocket)
+		if err != nil {
+			panic(fmt.Sprintf("runClient(): can't start because net.ResolveUnixAddr() returned %+v", err))
+		}
 
-	listener, err := net.ListenUnix("unix", listenAddress)
-	if err != nil {
-		panic(fmt.Sprintf("can't start because net.ListenUnix() returned %+v", err))
+		listener, err = net.ListenUnix("unix", listenAddress)
+		if err != nil {
+			panic(fmt.Sprintf("can't start because net.ListenUnix() returned %+v", err))
+		}
+		log.Printf("AdminUnixSocket Listening: %v\n\n", config.AdminUnixSocket)
+		defer listener.Close()
+	} else if config.AdminUnixSocket == "" && config.AdminAPIPort != 0 {
+		addrString := fmt.Sprintf("127.0.0.1:%d", config.AdminAPIPort)
+		addr, err := net.ResolveTCPAddr("tcp", addrString)
+		if err != nil {
+			panic(fmt.Sprintf("runClient(): can't start because net.ResolveTCPAddr(%s) returned %+v", addrString, err))
+		}
+		tcpListener, err := net.ListenTCP("tcp", addr)
+		if err != nil {
+			panic(fmt.Sprintf("runClient(): can't start because net.ListenTCP(%s) returned %+v", addrString, err))
+		}
+
+		caCertPool := x509.NewCertPool()
+		caCertBytes, err := ioutil.ReadFile(config.AdminAPICACertificateFile)
+		if err != nil {
+			panic(fmt.Sprintf("runClient(): can't start because ioutil.ReadFile(%s) returned %+v", config.AdminAPICACertificateFile, err))
+		}
+		caCertPool.AppendCertsFromPEM(caCertBytes)
+
+		tlsCert, err := tls.LoadX509KeyPair(config.AdminAPITlsCertificateFile, config.AdminAPITlsKeyFile)
+		if err != nil {
+			panic(fmt.Sprintf(
+				"runClient(): can't start because tls.LoadX509KeyPair(%s,%s) returned %+v",
+				config.AdminAPITlsCertificateFile, config.AdminAPITlsKeyFile, err,
+			))
+		}
+
+		tlsConfig := &tls.Config{
+			Certificates: []tls.Certificate{tlsCert},
+			ClientCAs:    caCertPool,
+			ClientAuth:   tls.RequireAndVerifyClientCert,
+		}
+		tlsConfig.BuildNameToCertificate()
+
+		listener = tls.NewListener(tcpListener, tlsConfig)
+	} else if config.AdminUnixSocket != "" && config.AdminAPIPort != 0 {
+		log.Fatal("One or the other (and not both) of AdminUnixSocket or AdminAPIPort is required")
+		return
+	} else if config.AdminUnixSocket == "" && config.AdminAPIPort == 0 {
+		return
 	}
-	log.Printf("AdminUnixSocket Listening: %v\n\n", config.AdminUnixSocket)
-	defer listener.Close()
 
 	server := http.Server{
 		Handler:      clientAdminAPI{},
@@ -319,9 +366,9 @@ func runClientAdminApi(config ClientConfig) {
 		WriteTimeout: 10 * time.Second,
 	}
 
-	err = server.Serve(listener)
+	err := server.Serve(listener)
 	if err != nil {
-		panic(fmt.Sprintf("AdminUnixSocket server returned %+v", err))
+		panic(fmt.Sprintf("Admin API server returned %+v", err))
 	}
 }
 

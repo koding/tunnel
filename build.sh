@@ -44,6 +44,6 @@ function build() {
 
 }
 
-build arm
+#build arm
 build amd64
-build arm64
+#build arm64
