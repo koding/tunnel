@@ -482,6 +482,20 @@ func compareListenerConfigs(a, b ListenerConfig) bool {
 
 func (s *MultiTenantInternalAPI) ServeHTTP(responseWriter http.ResponseWriter, request *http.Request) {
 	switch path.Clean(request.URL.Path) {
+	case "/clientStates":
+		tenantId := request.URL.Query().Get("tenantId")
+		if _, hasClientStatesByTenant := clientStatesByTenant[tenantId]; tenantId == "" || !hasClientStatesByTenant {
+			responseWriter.Header().Set("Content-Type", "application/json")
+			responseWriter.Write([]byte("{}"))
+		} else {
+			bytes, err := json.Marshal(clientStatesByTenant[tenantId])
+			if err != nil {
+				http.Error(responseWriter, "500 JSON Marshal Error", http.StatusInternalServerError)
+				return
+			}
+			responseWriter.Header().Set("Content-Type", "application/json")
+			responseWriter.Write(bytes)
+		}
 	case "/tenants":
 		if request.Method == "GET" || request.Method == "PUT" {
 			if request.Method == "PUT" {
