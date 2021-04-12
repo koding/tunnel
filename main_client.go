@@ -25,7 +25,7 @@ type ClientConfig struct {
 	DebugLog                   bool
 	ClientId                   string
 	GreenhouseDomain           string
-	GreenhouseAPIKey           string
+	GreenhouseAPIToken         string
 	GreenhouseThresholdPort    int
 	ServerAddr                 string
 	Servers                    []string
@@ -96,8 +96,8 @@ func runClient(configFileName *string) {
 		if config.Servers != nil && len(config.Servers) > 0 {
 			log.Fatal("config contains both GreenhouseDomain and Servers, only use one or the other")
 		}
-		if config.GreenhouseAPIKey == "" {
-			log.Fatal("config contains GreenhouseDomain but does not contain GreenhouseAPIKey, use both or niether")
+		if config.GreenhouseAPIToken == "" {
+			log.Fatal("config contains GreenhouseDomain but does not contain GreenhouseAPIToken, use both or niether")
 		}
 
 		greenhouseClient := http.Client{Timeout: time.Second * 10}
@@ -106,13 +106,13 @@ func runClient(configFileName *string) {
 		if err != nil {
 			log.Fatal("invalid GreenhouseDomain '%s', can't create http request for %s", config.GreenhouseDomain, greenhouseURL)
 		}
-		request.Header.Add("Authorization", fmt.Sprintf("Bearer %s", config.GreenhouseAPIKey))
+		request.Header.Add("Authorization", fmt.Sprintf("Bearer %s", config.GreenhouseAPIToken))
 
 		response, err := greenhouseClient.Do(request)
 		if err != nil || response.StatusCode != 200 {
 			if err == nil {
 				if response.StatusCode == 401 {
-					log.Fatalf("bad or expired GreenhouseAPIKey, recieved HTTP 401 Unauthorized from Greenhouse server %s", greenhouseURL)
+					log.Fatalf("bad or expired GreenhouseAPIToken, recieved HTTP 401 Unauthorized from Greenhouse server %s", greenhouseURL)
 				} else {
 					log.Fatalf("server error: recieved HTTP %d from Greenhouse server %s", response.StatusCode, greenhouseURL)
 				}
@@ -161,7 +161,7 @@ func runClient(configFileName *string) {
 	configToLogString := string(configToLog)
 
 	configToLogString = regexp.MustCompile(
-		`("GreenhouseAPIKey": ")[^"]+(",)`,
+		`("GreenhouseAPIToken": ")[^"]+(",)`,
 	).ReplaceAllString(
 		configToLogString,
 		"$1******$2",
@@ -180,11 +180,11 @@ func runClient(configFileName *string) {
 			log.Fatal(fmt.Sprintf("can't start because tls.LoadX509KeyPair returned: \n%+v\n", err))
 		}
 	} else if !hasFiles && hasLiterals {
-
 		cert, err = tls.X509KeyPair([]byte(config.ClientTlsCertificate), []byte(config.ClientTlsKey))
 		if err != nil {
 			log.Fatal(fmt.Sprintf("can't start because tls.X509KeyPair returned: \n%+v\n", err))
 		}
+
 	} else {
 		log.Fatal("one or the other (not both) of ClientTlsCertificateFile+ClientTlsKeyFile or ClientTlsCertificate+ClientTlsKey is required\n")
 	}

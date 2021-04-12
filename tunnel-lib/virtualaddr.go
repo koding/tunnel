@@ -238,6 +238,8 @@ func (vaddr *vaddrStorage) HasIdentifier(identifier string) bool {
 }
 
 func (vaddr *vaddrStorage) getListenerInfo(conn net.Conn) (*ListenerInfo, string, []byte) {
+
+	// TODO maybe want to figure out how to set the read timeout lower for this ??
 	connectionHeader := make([]byte, 4096)
 	n, err := conn.Read(connectionHeader)
 	if err != nil && err != io.EOF {
