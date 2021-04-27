@@ -482,20 +482,35 @@ func compareListenerConfigs(a, b ListenerConfig) bool {
 
 func (s *MultiTenantInternalAPI) ServeHTTP(responseWriter http.ResponseWriter, request *http.Request) {
 	switch path.Clean(request.URL.Path) {
-	case "/clientStates":
+	case "/tenantInfo":
 		tenantId := request.URL.Query().Get("tenantId")
-		if _, hasClientStatesByTenant := clientStatesByTenant[tenantId]; tenantId == "" || !hasClientStatesByTenant {
-			responseWriter.Header().Set("Content-Type", "application/json")
-			responseWriter.Write([]byte("{}"))
-		} else {
-			bytes, err := json.Marshal(clientStatesByTenant[tenantId])
-			if err != nil {
-				http.Error(responseWriter, "500 JSON Marshal Error", http.StatusInternalServerError)
-				return
-			}
-			responseWriter.Header().Set("Content-Type", "application/json")
-			responseWriter.Write(bytes)
+		clientStates, hasClientStatesByTenant := clientStatesByTenant[tenantId]
+		listeners, hasListenersByTenant := listenersByTenant[tenantId]
+
+		if tenantId == "" || tenantId == "0" {
+			http.Error(responseWriter, "400 Bad Request: tenantId url parameter is required", http.StatusBadRequest)
 		}
+
+		if !hasClientStatesByTenant {
+			clientStates = map[string]ClientState{}
+		}
+		if !hasListenersByTenant {
+			listeners = []ListenerConfig{}
+		}
+		resultObject := struct {
+			ClientStates map[string]ClientState
+			Listeners    []ListenerConfig
+		}{
+			ClientStates: clientStates,
+			Listeners:    listeners,
+		}
+		bytes, err := json.Marshal(resultObject)
+		if err != nil {
+			http.Error(responseWriter, "500 JSON Marshal Error", http.StatusInternalServerError)
+			return
+		}
+		responseWriter.Header().Set("Content-Type", "application/json")
+		responseWriter.Write(bytes)
 	case "/tenants":
 		if request.Method == "GET" || request.Method == "PUT" {
 			if request.Method == "PUT" {
