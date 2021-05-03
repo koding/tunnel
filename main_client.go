@@ -55,6 +55,10 @@ type LiveConfigUpdate struct {
 	ServiceToLocalAddrMap map[string]string
 }
 
+type ThresholdTenantInfo struct {
+	ThresholdServers []string
+}
+
 type clientAdminAPI struct{}
 
 // Client State
@@ -101,7 +105,7 @@ func runClient(configFileName *string) {
 		}
 
 		greenhouseClient := http.Client{Timeout: time.Second * 10}
-		greenhouseURL := fmt.Sprintf("https://%s/api/thresholdservers", config.GreenhouseDomain)
+		greenhouseURL := fmt.Sprintf("https://%s/api/tenant_info", config.GreenhouseDomain)
 		request, err := http.NewRequest("GET", greenhouseURL, nil)
 		if err != nil {
 			log.Fatal("invalid GreenhouseDomain '%s', can't create http request for %s", config.GreenhouseDomain, greenhouseURL)
@@ -130,12 +134,12 @@ func runClient(configFileName *string) {
 			if err != nil {
 				log.Fatal("http read error GET '%s'", greenhouseURL)
 			}
-			var ipPorts []string
-			err = json.Unmarshal(responseBytes, &ipPorts)
+			var tenantInfo ThresholdTenantInfo
+			err = json.Unmarshal(responseBytes, &tenantInfo)
 			if err != nil {
 				log.Fatal("http read error GET '%s'", greenhouseURL)
 			}
-			for _, serverHostPort := range ipPorts {
+			for _, serverHostPort := range tenantInfo.ThresholdServers {
 				clientServers = append(clientServers, makeServer(serverHostPort))
 			}
 		}
@@ -435,7 +439,7 @@ func (handler clientAdminAPI) ServeHTTP(response http.ResponseWriter, request *h
 					)
 					http.Error(
 						response,
-						fmt.Sprintf("502 tunnels request returned HTTP %d", tunnelsResponse.StatusCode),
+						fmt.Sprintf("502 tunnels request returned HTTP %d: %s", tunnelsResponse.StatusCode, string(tunnelsResponseBytes)),
 						http.StatusBadGateway,
 					)
 					return
