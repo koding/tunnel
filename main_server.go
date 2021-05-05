@@ -721,19 +721,22 @@ func (s *ManagementHttpHandler) ServeHTTP(responseWriter http.ResponseWriter, re
 					http.Error(responseWriter, errorMessage, statusCode)
 					return
 				}
-
-				bytes, err := json.Marshal(listenerConfigs)
-				if err != nil {
-					http.Error(responseWriter, "500 JSON Marshal Error", http.StatusInternalServerError)
-					return
-				}
-
-				responseWriter.Header().Set("Content-Type", "application/json")
-				responseWriter.Write(bytes)
 			}
+		}
+
+		if request.Method == "PUT" || request.Method == "GET" {
+			bytes, err := json.Marshal(listenersByTenant[tenantId])
+			if err != nil {
+				http.Error(responseWriter, "500 JSON Marshal Error", http.StatusInternalServerError)
+				return
+			}
+
+			responseWriter.Header().Set("Content-Type", "application/json")
+			responseWriter.Write(bytes)
 		} else {
-			responseWriter.Header().Set("Allow", "PUT")
-			http.Error(responseWriter, "405 Method Not Allowed, try PUT", http.StatusMethodNotAllowed)
+			responseWriter.Header().Add("Allow", "PUT")
+			responseWriter.Header().Add("Allow", "GET")
+			http.Error(responseWriter, "405 Method Not Allowed, try GET or PUT", http.StatusMethodNotAllowed)
 		}
 	case "/ping":
 		if request.Method == "GET" {

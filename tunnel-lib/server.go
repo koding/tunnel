@@ -203,8 +203,6 @@ func (s *Server) serveTCPConn(conn net.Conn) {
 }
 
 func (s *Server) handleTCPConn(conn net.Conn) error {
-	// TODO getListenerInfo should return the bytes we read to try to get teh hostname
-	// then we stream.write those right after the SendProxyProtocolv1 bit.
 
 	log.Println(5)
 	listenerInfo, sniHostname, connectionHeader := s.virtualAddrs.getListenerInfo(conn)
@@ -222,7 +220,7 @@ func (s *Server) handleTCPConn(conn net.Conn) error {
 	if listenerInfo.BackendService != "" {
 		service = listenerInfo.BackendService
 	}
-	log.Println(7)
+	log.Printf("7: dial(%s, %s)", listenerInfo.AssociatedClientId, service)
 	stream, err := s.dial(listenerInfo.AssociatedClientId, service)
 	log.Println(8)
 	if err != nil {
@@ -372,7 +370,7 @@ func (s *Server) dial(identifier string, service string) (net.Conn, error) {
 	}
 
 	if s.debugLog {
-		log.Printf("Server.proxy(): Sending control msg %+v\n", msg)
+		log.Printf("Server.proxy(): Sending control msg %+v to %s \n", msg, identifier)
 	}
 
 	// ask client to open a session to us, so we can accept it

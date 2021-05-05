@@ -288,7 +288,8 @@ func (vaddr *vaddrStorage) getListenerInfo(conn net.Conn) (*ListenerInfo, string
 		if err == nil && listenHostMatches && listenPortMatches {
 
 			recordSpecificity := -10
-			var mostSpecificMatchingBackend *ListenerInfo = nil
+			mostSpecificMatchingBackend := ListenerInfo{}
+			hasMatchingBackend := false
 			for _, backend := range listener.backends {
 				globToUse := backend.HostnameGlob
 				if globToUse == "" {
@@ -297,14 +298,21 @@ func (vaddr *vaddrStorage) getListenerInfo(conn net.Conn) (*ListenerInfo, string
 				numberOfPeriods := len(vaddr.dotRegex.FindAllString(globToUse, -1))
 				numberOfGlobs := len(vaddr.globRegex.FindAllString(globToUse, -1))
 				specificity := numberOfPeriods - numberOfGlobs
-				//log.Printf("%d > %d && Glob(%s, %s) (%t)\n", specificity, recordSpecificity, globToUse, hostname, Glob(globToUse, hostname))
+				log.Printf("%d > %d && Glob(%s, %s)->(%t)\n", specificity, recordSpecificity, globToUse, hostname, Glob(globToUse, hostname))
 				if specificity > recordSpecificity && Glob(globToUse, hostname) {
 					recordSpecificity = specificity
-					mostSpecificMatchingBackend = &backend
+					mostSpecificMatchingBackend = backend
+					hasMatchingBackend = true
+					log.Printf("mostSpecificMatchingBackend: %s->%s\n", mostSpecificMatchingBackend.AssociatedClientId, mostSpecificMatchingBackend.BackendService)
 				}
 			}
 
-			return mostSpecificMatchingBackend, hostname, connectionHeader[:n]
+			if hasMatchingBackend {
+				return &mostSpecificMatchingBackend, hostname, connectionHeader[:n]
+			} else {
+				return nil, hostname, connectionHeader[:n]
+			}
+
 		}
 	}
 
