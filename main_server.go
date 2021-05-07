@@ -300,15 +300,20 @@ func setListeners(tenantId string, listenerConfigs []ListenerConfig) (int, strin
 	currentListenersThatCanKeepRunning := make([]ListenerConfig, 0)
 	newListenersThatHaveToBeAdded := make([]ListenerConfig, 0)
 
-	for _, newListenerConfig := range listenerConfigs {
-		clientState, everHeardOfClientBefore := clientStatesByTenant[tenantId][newListenerConfig.ClientId]
-		if !everHeardOfClientBefore {
-			return http.StatusNotFound, fmt.Sprintf("Client %s Not Found", newListenerConfig.ClientId)
-		}
-		if clientState.CurrentState != tunnel.ClientConnected.String() {
-			return http.StatusNotFound, fmt.Sprintf("Client %s is not connected it is %s", newListenerConfig.ClientId, clientState.CurrentState)
-		}
-	}
+	// I think its probably a good idea to allow the user to create tunnels for nodes that aren't connected
+	// If a node has a temporary outage (or a threshold server respawns during a node outage)
+	// that should not prevent the user from setting the tunnels
+	// If the server tries to dial a disconnected node, it will simply fail dailing with an error.
+
+	// for _, newListenerConfig := range listenerConfigs {
+	// 	clientState, everHeardOfClientBefore := clientStatesByTenant[tenantId][newListenerConfig.ClientId]
+	// 	if !everHeardOfClientBefore {
+	// 		return http.StatusNotFound, fmt.Sprintf("Client %s Not Found", newListenerConfig.ClientId)
+	// 	}
+	// 	if clientState.CurrentState != tunnel.ClientConnected.String() {
+	// 		return http.StatusNotFound, fmt.Sprintf("Client %s is not connected it is %s", newListenerConfig.ClientId, clientState.CurrentState)
+	// 	}
+	// }
 
 	for _, existingListener := range listenersByTenant[tenantId] {
 		canKeepRunning := false

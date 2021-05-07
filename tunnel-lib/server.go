@@ -224,6 +224,7 @@ func (s *Server) handleTCPConn(conn net.Conn) error {
 	stream, err := s.dial(listenerInfo.AssociatedClientId, service)
 	log.Println(8)
 	if err != nil {
+		log.Printf("Server.handleTCPConn(): failed to dial %s on client %s: %s\n", service, listenerInfo.AssociatedClientId, err)
 		return err
 	}
 
