@@ -199,9 +199,7 @@ func NewClient(cfg *ClientConfig) (*Client, error) {
 
 	proxy := cfg.Proxy
 	if proxy == nil {
-		var f ProxyFuncs
-		f.TCP = (&TCPProxy{FetchLocalAddr: cfg.FetchLocalAddr, DebugLog: cfg.DebugLog}).Proxy
-		proxy = Proxy(f)
+		proxy = (&TCPProxy{FetchLocalAddr: cfg.FetchLocalAddr, DebugLog: cfg.DebugLog}).Proxy
 	}
 
 	var bo Backoff = newForeverBackoff()

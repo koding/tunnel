@@ -2,12 +2,16 @@ package main
 
 import (
 	"bytes"
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"log"
+	"math/big"
 	"net"
 	"net/http"
 	"net/url"
@@ -19,6 +23,7 @@ import (
 	"time"
 
 	tunnel "git.sequentialread.com/forest/threshold/tunnel-lib"
+	"git.sequentialread.com/forest/threshold/tunnel-lib/proto"
 )
 
 type ClientConfig struct {
@@ -65,6 +70,11 @@ type clientAdminAPI struct{}
 var clientServers []ClientServer
 var tlsClientConfig *tls.Config
 var serviceToLocalAddrMap *map[string]string
+
+var isTestMode bool
+var testModeListeners map[string]ListenerConfig
+var testModeTLSConfig tls.Config
+var testTokens []string
 
 func runClient(configFileName *string) {
 
@@ -273,6 +283,19 @@ func runClient(configFileName *string) {
 		return localAddr, nil
 	}
 
+	productionProxyFunc := (&tunnel.TCPProxy{
+		FetchLocalAddr: fetchLocalAddr,
+		DebugLog:       config.DebugLog,
+	}).Proxy
+
+	proxyFunc := func(remote net.Conn, msg *proto.ControlMessage) {
+		if isTestMode {
+			handleTestConnection(remote, msg)
+		} else {
+			productionProxyFunc(remote, msg)
+		}
+	}
+
 	for _, server := range clientServers {
 		clientStateChanges := make(chan *tunnel.ClientStateChange)
 		tunnelClientConfig := &tunnel.ClientConfig{
@@ -280,6 +303,7 @@ func runClient(configFileName *string) {
 			Identifier:     config.ClientId,
 			ServerAddr:     server.ServerHostPort,
 			FetchLocalAddr: fetchLocalAddr,
+			Proxy:          proxyFunc,
 			Dial:           dialFunction,
 			StateChanges:   clientStateChanges,
 		}
@@ -462,4 +486,101 @@ func (handler clientAdminAPI) ServeHTTP(response http.ResponseWriter, request *h
 		http.Error(response, "404 not found, try PUT /liveconfig", http.StatusNotFound)
 	}
 
+}
+
+func handleTestConnection(remote net.Conn, msg *proto.ControlMessage) {
+	listenerInfo, hasListenerInfo := testModeListeners[msg.Service]
+	if !hasListenerInfo {
+		remote.Close()
+	} else if listenerInfo.ListenHostnameGlob != "" && listenerInfo.ListenHostnameGlob != "*" {
+		// TODO make greenhouse-desktop always use HAPROXY proxy protocol with Caddy
+		// so caddy can get the real remote IP
+		if listenerInfo.ListenPort == 80 {
+			requestBuffer := make([]byte, 1024)
+			bytesRead, err := remote.Read(requestBuffer)
+			if err != nil {
+				remote.Close()
+			} else {
+				result := regexp.MustCompile("GET /([^ ]+) HTTP/1.1").FindStringSubmatch(string(requestBuffer[:bytesRead]))
+				if result != nil && len(result) == 2 {
+					testToken := result[1]
+					testTokens = append(testTokens, testToken)
+					remote.Write([]byte(fmt.Sprintf(`HTTP/1.1 200 OK
+Content-Type: text/plain
+
+%s`, testToken)))
+					// TODO add remote.RemoteAddr().String()
+					remote.Close()
+				}
+			}
+		} else {
+			remote_tls := tls.Server(remote, &testModeTLSConfig)
+			err := remote_tls.Handshake()
+			if err != nil {
+				remote_tls.Close()
+				return
+			}
+			requestBuffer := make([]byte, 1024)
+			bytesRead, err := remote_tls.Read(requestBuffer)
+			if err != nil {
+				remote_tls.Close()
+				return
+			}
+			testToken := string(requestBuffer[:bytesRead])
+			testTokens = append(testTokens, testToken)
+			remote_tls.Write([]byte(testToken))
+			remote_tls.Close()
+		}
+	} else {
+		requestBuffer := make([]byte, 1024)
+		bytesRead, err := remote.Read(requestBuffer)
+		if err != nil {
+			remote.Close()
+			return
+		}
+		testToken := string(requestBuffer[:bytesRead])
+		testTokens = append(testTokens, testToken)
+		remote.Write([]byte(testToken))
+		remote.Close()
+	}
+}
+
+// https://gist.github.com/shivakar/cd52b5594d4912fbeb46
+// create a bogus TLS key pair for the test server to use -- the test client will use InsecureSkipVerify
+func GenerateTestX509Cert() (tls.Certificate, error) {
+	now := time.Now()
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(now.Unix()),
+		Subject: pkix.Name{
+			CommonName:         "threshold-test-certificate.example.com",
+			Country:            []string{"USA"},
+			Organization:       []string{"example.com"},
+			OrganizationalUnit: []string{"threshold-test-certificate"},
+		},
+		NotBefore:             now,
+		NotAfter:              now.AddDate(99, 0, 0),                                   // Valid for long time (99 years)
+		SubjectKeyId:          []byte{113, 117, 105, 99, 107, 115, 101, 114, 118, 101}, // nonsense bytes
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		KeyUsage: x509.KeyUsageKeyEncipherment |
+			x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+	}
+
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+
+	cert, err := x509.CreateCertificate(rand.Reader, template, template,
+		priv.Public(), priv)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+
+	var outCert tls.Certificate
+	outCert.Certificate = append(outCert.Certificate, cert)
+	outCert.PrivateKey = priv
+
+	return outCert, nil
 }

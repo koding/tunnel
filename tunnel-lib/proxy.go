@@ -13,24 +13,6 @@ import (
 // ProxyFunc is responsible for forwarding a remote connection to local server and writing the response back.
 type ProxyFunc func(remote net.Conn, msg *proto.ControlMessage)
 
-// ProxyFuncs is a collection of ProxyFunc.
-type ProxyFuncs struct {
-	// TCP is custom implementation of TCP proxing.
-	TCP ProxyFunc
-}
-
-// Proxy returns a ProxyFunc that uses custom function if provided, otherwise falls back to DefaultProxyFuncs.
-func Proxy(p ProxyFuncs) ProxyFunc {
-	return func(remote net.Conn, msg *proto.ControlMessage) {
-		if p.TCP == nil {
-			panic("TCP handler is required for Proxy")
-		}
-
-		// I removed all the other handlers that are not TCP 😇
-		p.TCP(remote, msg)
-	}
-}
-
 // Join copies data between local and remote connections.
 // It reads from one connection and writes to the other.
 // It's a building block for ProxyFunc implementations.
