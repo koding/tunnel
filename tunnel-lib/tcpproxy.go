@@ -3,6 +3,7 @@ package tunnel
 import (
 	"log"
 	"net"
+	"strings"
 
 	"git.sequentialread.com/forest/threshold/tunnel-lib/proto"
 )
@@ -34,9 +35,14 @@ func (p *TCPProxy) Proxy(remote net.Conn, msg *proto.ControlMessage) {
 
 	//log.Debug("Dialing local server: %q", localAddr)
 	//fmt.Printf("Dialing local server: %q\n\n", localAddr)
-	local, err := net.DialTimeout("tcp", localAddr, defaultTimeout)
+	network := "tcp"
+	if strings.HasPrefix(localAddr, "unix//") {
+		network = "unix"
+		localAddr = strings.TrimPrefix(localAddr, "unix//")
+	}
+	local, err := net.DialTimeout(network, localAddr, defaultTimeout)
 	if err != nil {
-		log.Println("TCPProxy.Proxy(): Dialing local server %q failed: %s", localAddr, err)
+		log.Printf("TCPProxy.Proxy(): Dialing local server %s failed: %s", localAddr, err)
 		return
 	}
 

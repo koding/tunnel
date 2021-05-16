@@ -24,6 +24,7 @@ import (
 
 	tunnel "git.sequentialread.com/forest/threshold/tunnel-lib"
 	"git.sequentialread.com/forest/threshold/tunnel-lib/proto"
+	proxyprotocol "github.com/armon/go-proxyproto"
 )
 
 type ClientConfig struct {
@@ -73,7 +74,7 @@ var serviceToLocalAddrMap *map[string]string
 
 var isTestMode bool
 var testModeListeners map[string]ListenerConfig
-var testModeTLSConfig tls.Config
+var testModeTLSConfig *tls.Config
 var testTokens []string
 
 func runClient(configFileName *string) {
@@ -403,6 +404,28 @@ func runClientAdminApi(config ClientConfig) {
 // client admin api handler for /liveconfig over unix socket
 func (handler clientAdminAPI) ServeHTTP(response http.ResponseWriter, request *http.Request) {
 	switch path.Clean(request.URL.Path) {
+	case "/start_test":
+		isTestMode = true
+		testTokens = []string{}
+		if testModeTLSConfig == nil {
+			certificate, err := GenerateTestX509Cert()
+			if err != nil {
+				log.Printf("clientAdminAPI: GenerateTestX509Cert failed: %+v\n\n", err)
+				http.Error(response, "500 GenerateTestX509Cert failed", http.StatusInternalServerError)
+				return
+			}
+			testModeTLSConfig = &tls.Config{
+				Certificates: []tls.Certificate{certificate},
+			}
+			testModeTLSConfig.BuildNameToCertificate()
+		}
+		response.Write([]byte("OK"))
+	case "/end_test":
+		isTestMode = false
+		response.Header().Set("Content-Type", "text/plain")
+		for _, testToken := range testTokens {
+			response.Write([]byte(fmt.Sprintln(testToken)))
+		}
 	case "/liveconfig":
 		if request.Method == "PUT" {
 			requestBytes, err := ioutil.ReadAll(request.Body)
@@ -474,6 +497,12 @@ func (handler clientAdminAPI) ServeHTTP(response http.ResponseWriter, request *h
 				serviceToLocalAddrMap = &configUpdate.ServiceToLocalAddrMap
 			}
 
+			// cache the listeners locally for use in test mode.
+			testModeListeners = map[string]ListenerConfig{}
+			for _, listener := range configUpdate.Listeners {
+				testModeListeners[listener.BackEndService] = listener
+			}
+
 			response.Header().Add("content-type", "application/json")
 			response.WriteHeader(http.StatusOK)
 			response.Write(requestBytes)
@@ -483,16 +512,22 @@ func (handler clientAdminAPI) ServeHTTP(response http.ResponseWriter, request *h
 			http.Error(response, "405 method not allowed, try PUT", http.StatusMethodNotAllowed)
 		}
 	default:
-		http.Error(response, "404 not found, try PUT /liveconfig", http.StatusNotFound)
+		http.Error(response, "404 not found, try PUT /liveconfig or PUT/GET /testmode", http.StatusNotFound)
 	}
 
 }
 
 func handleTestConnection(remote net.Conn, msg *proto.ControlMessage) {
 	listenerInfo, hasListenerInfo := testModeListeners[msg.Service]
+	log.Printf("handleTestConnection: %s (%s, %d)", msg.Service, listenerInfo.ListenHostnameGlob, listenerInfo.ListenPort)
 	if !hasListenerInfo {
 		remote.Close()
-	} else if listenerInfo.ListenHostnameGlob != "" && listenerInfo.ListenHostnameGlob != "*" {
+		return
+	}
+	if listenerInfo.HaProxyProxyProtocol {
+		remote = proxyprotocol.NewConn(remote, time.Second*5)
+	}
+	if listenerInfo.ListenHostnameGlob != "" && listenerInfo.ListenHostnameGlob != "*" {
 		// TODO make greenhouse-desktop always use HAPROXY proxy protocol with Caddy
 		// so caddy can get the real remote IP
 		if listenerInfo.ListenPort == 80 {
@@ -514,7 +549,7 @@ Content-Type: text/plain
 				}
 			}
 		} else {
-			remote_tls := tls.Server(remote, &testModeTLSConfig)
+			remote_tls := tls.Server(remote, testModeTLSConfig)
 			err := remote_tls.Handshake()
 			if err != nil {
 				remote_tls.Close()
