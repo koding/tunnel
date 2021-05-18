@@ -584,6 +584,10 @@ Content-Type: text/plain
 // create a bogus TLS key pair for the test server to use -- the test client will use InsecureSkipVerify
 func GenerateTestX509Cert() (tls.Certificate, error) {
 	now := time.Now()
+
+	subjectKeyIDByteSlice := make([]byte, 10)
+	rand.Read(subjectKeyIDByteSlice)
+
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(now.Unix()),
 		Subject: pkix.Name{
@@ -593,8 +597,8 @@ func GenerateTestX509Cert() (tls.Certificate, error) {
 			OrganizationalUnit: []string{"threshold-test-certificate"},
 		},
 		NotBefore:             now,
-		NotAfter:              now.AddDate(99, 0, 0),                                   // Valid for long time (99 years)
-		SubjectKeyId:          []byte{113, 117, 105, 99, 107, 115, 101, 114, 118, 101}, // nonsense bytes
+		NotAfter:              now.AddDate(99, 0, 0), // Valid for long time (99 years)
+		SubjectKeyId:          subjectKeyIDByteSlice,
 		BasicConstraintsValid: true,
 		IsCA:                  true,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
