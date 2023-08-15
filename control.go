@@ -1,4 +1,4 @@
-package tunnel
+package mylittleproxy
 
 import (
 	"encoding/json"

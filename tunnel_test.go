@@ -1,4 +1,4 @@
-package tunnel_test
+package mylittleproxy_test
 
 import (
 	"fmt"
@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cajax/mylittleproxy/tunneltest"
 	"github.com/koding/tunnel"
-	"github.com/koding/tunnel/tunneltest"
 
 	"github.com/cenkalti/backoff"
 )

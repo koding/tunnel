@@ -6,7 +6,8 @@ const (
 	ControlPath = "/_controlPath/"
 
 	// ClientIdentifierHeader is header carrying information about tunnel identifier.
-	ClientIdentifierHeader = "X-KTunnel-Identifier"
+	ClientIdentifierHeader    = "X-Tunnel-Identifier"
+	ClientIdentifierSignature = "X-Tunnel-Signature"
 
 	// control messages
 
@@ -17,3 +18,18 @@ const (
 	// HandshakeResponse is response to HandshakeRequest sent by server to client.
 	HandshakeResponse = "controlOk"
 )
+
+type ConnectionConfig struct {
+	Http HTTPConfig `json:"http"`
+	// TODO WS and TCP
+}
+
+type HTTPConfig struct {
+	Domain  string            `json:"domain"`
+	Rewrite []HTTPRewriteRule `json:"rewrite"`
+}
+
+type HTTPRewriteRule struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+}

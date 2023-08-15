@@ -1,9 +1,12 @@
-package tunnel
+package mylittleproxy
 
 import (
 	"bufio"
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"go.uber.org/zap"
 	"io/ioutil"
 	"net"
 	"net/http"
@@ -11,8 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/koding/logging"
-	"github.com/koding/tunnel/proto"
+	"github.com/cajax/mylittleproxy/proto"
 
 	"github.com/hashicorp/yamux"
 )
@@ -98,14 +100,17 @@ type Client struct {
 	// redialBackoff is used to reconnect in exponential backoff intervals
 	redialBackoff Backoff
 
-	log logging.Logger
+	log *zap.Logger
 }
 
 // ClientConfig defines the configuration for the Client
 type ClientConfig struct {
-	// Identifier is the secret token that needs to be passed to the server.
+	// Identifier of connecting client.It must be signed with SignatureKey to be valid
 	// Required if FetchIdentifier is not set.
 	Identifier string
+
+	// Key used to signIdentifier Identifier
+	SignatureKey string
 
 	// FetchIdentifier can be used to fetch identifier. Required if Identifier
 	// is not set.
@@ -118,6 +123,9 @@ type ClientConfig struct {
 	// FetchServerAddr can be used to fetch tunnel server address.
 	// Required if ServerAddress is not set.
 	FetchServerAddr func() (string, error)
+
+	// FetchSignatureKey can be used to fetch secret key used to sign client ID.
+	FetchSignatureKey func() (string, error)
 
 	// Dial provides custom transport layer for client server communication.
 	//
@@ -145,7 +153,7 @@ type ClientConfig struct {
 	// give up on reconnection.
 	//
 	// If custom backoff is used, client will emit ErrRedialAborted set
-	// with ClientClosed event when no more reconnection atttemps should
+	// with ClientClosed event when no more reconnection attempts should
 	// be made.
 	Backoff Backoff
 
@@ -153,11 +161,8 @@ type ClientConfig struct {
 	// yamux.DefaultConfig() is used.
 	YamuxConfig *yamux.Config
 
-	// Log defines the logger. If nil a default logging.Logger is used.
-	Log logging.Logger
-
-	// Debug enables debug mode, enable only if you want to debug the server.
-	Debug bool
+	// Log defines the logger
+	Log *zap.Logger
 
 	// DEPRECATED:
 
@@ -166,6 +171,10 @@ type ClientConfig struct {
 
 	// FetchLocalAddr is DEPRECATED please use ProxyTCP.FetchLocalAddr, see ProxyOverwrite for more details.
 	FetchLocalAddr func(port int) (string, error)
+
+	// Settings sent to server for given client
+	// TODO separate proto and client config types. Fill proto from config upon creation
+	ConnectionConfig proto.ConnectionConfig
 }
 
 // verify is used to verify the ClientConfig
@@ -227,7 +236,7 @@ func NewClient(cfg *ClientConfig) (*Client, error) {
 		bo = cfg.Backoff
 	}
 
-	log := newLogger("tunnel-client", cfg.Debug)
+	log, _ := zap.NewProduction()
 	if cfg.Log != nil {
 		log = cfg.Log
 	}
@@ -265,6 +274,13 @@ func (c *Client) Start() {
 
 		return c.config.ServerAddr, nil
 	}
+	fetchSignatureKey := func() (string, error) {
+		if c.config.FetchSignatureKey != nil {
+			return c.config.FetchSignatureKey()
+		}
+
+		return c.config.SignatureKey, nil
+	}
 
 	c.changeState(ClientStarted, nil)
 
@@ -293,22 +309,29 @@ func (c *Client) Start() {
 		identifier, err := fetchIdent()
 		if err != nil {
 			lastErr = err
-			c.log.Critical("client fetch identifier error: %s", err)
+			c.log.Error("client fetch identifier error", zap.Error(err))
 			continue
 		}
 
 		serverAddr, err := fetchServerAddr()
 		if err != nil {
 			lastErr = err
-			c.log.Critical("client fetch server address error: %s", err)
+			c.log.Error("client fetch server address error", zap.Error(err))
+			continue
+		}
+
+		signatureKey, err := fetchSignatureKey()
+		if err != nil {
+			lastErr = err
+			c.log.Error("client fetch signature key error", zap.Error(err))
 			continue
 		}
 
 		c.setClosed(false)
 
-		if err := c.connect(identifier, serverAddr); err != nil {
+		if err := c.connect(identifier, serverAddr, signatureKey); err != nil {
 			lastErr = err
-			c.log.Debug("client connect error: %s", err)
+			c.log.Debug("client connect error", zap.Error(err))
 		}
 
 		// exit if closed
@@ -331,7 +354,7 @@ func (c *Client) Close() error {
 	waitCh := make(chan struct{})
 	go func() {
 		if err := c.session.GoAway(); err != nil {
-			c.log.Debug("Session go away failed: %s", err)
+			c.log.Debug("Session go away failed", zap.Error(err))
 		}
 
 		c.reqWg.Wait()
@@ -415,7 +438,7 @@ func (c *Client) changeState(state ClientState, err error) (prev ClientState) {
 		select {
 		case c.config.StateChanges <- change:
 		default:
-			c.log.Warning("Dropping state change due to slow reader: %s", change)
+			c.log.Warn("Dropping state change due to slow reader", zap.Any("change", change))
 		}
 	}
 
@@ -428,8 +451,8 @@ func (c *Client) isRetry(state ClientState) bool {
 	return state != ClientStarted && state != ClientClosed
 }
 
-func (c *Client) connect(identifier, serverAddr string) error {
-	c.log.Debug("Trying to connect to %q with identifier %q", serverAddr, identifier)
+func (c *Client) connect(identifier, serverAddr string, signatureKey string) error {
+	c.log.Debug("Trying to connect ", zap.String("server", serverAddr), zap.String("identifier", identifier))
 
 	conn, err := c.dial(serverAddr)
 	if err != nil {
@@ -437,15 +460,19 @@ func (c *Client) connect(identifier, serverAddr string) error {
 	}
 
 	remoteURL := controlURL(conn)
-	c.log.Debug("CONNECT to %q", remoteURL)
-	req, err := http.NewRequest("CONNECT", remoteURL, nil)
+	c.log.Debug("CONNECT ", zap.String("URL", remoteURL))
+
+	clientConfig, err := json.Marshal(c.config.ConnectionConfig)
+	req, err := http.NewRequest("CONNECT", remoteURL, bytes.NewBuffer(clientConfig))
 	if err != nil {
 		return fmt.Errorf("error creating request to %s: %s", remoteURL, err)
 	}
 
 	req.Header.Set(proto.ClientIdentifierHeader, identifier)
 
-	c.log.Debug("Writing request to TCP: %+v", req)
+	req.Header.Set(proto.ClientIdentifierSignature, signIdentifier(identifier, signatureKey))
+
+	c.log.Debug("Writing request", zap.Any("reques", req))
 
 	if err := req.Write(conn); err != nil {
 		return fmt.Errorf("writing CONNECT request to %s failed: %s", req.URL, err)
@@ -542,7 +569,7 @@ func (c *Client) listenControl(ct *control) error {
 			return fmt.Errorf("failure decoding control message: %s", err)
 		}
 
-		c.log.Debug("Received control msg %+v", msg)
+		c.log.Debug("Received control msg", zap.Any("message", msg))
 		c.log.Debug("Opening a new stream from server session")
 
 		remote, err := c.session.Open()

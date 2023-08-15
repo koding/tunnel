@@ -1,4 +1,4 @@
-package tunneltest
+package mylittleproxytest
 
 import (
 	"bytes"

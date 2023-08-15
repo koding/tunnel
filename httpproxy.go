@@ -1,4 +1,4 @@
-package tunnel
+package mylittleproxy
 
 import (
 	"bytes"
@@ -8,8 +8,8 @@ import (
 	"net"
 	"net/http"
 
+	"github.com/cajax/mylittleproxy/proto"
 	"github.com/koding/logging"
-	"github.com/koding/tunnel/proto"
 )
 
 var (
@@ -30,7 +30,7 @@ type HTTPProxy struct {
 	// This is optional if you want to specify a single TCP address.
 	LocalAddr string
 	// FetchLocalAddr is used for looking up TCP address of the server.
-	// This is optional if you want to specify a dynamic TCP address based on incommig port.
+	// This is optional if you want to specify a dynamic TCP address based on incoming port.
 	FetchLocalAddr func(port int) (string, error)
 	// ErrorResp is custom response send to tunnel server when client cannot
 	// establish connection to local server. If not set a default "no local server"

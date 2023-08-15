@@ -1,11 +1,11 @@
-package tunnel
+package mylittleproxy
 
 import (
 	"fmt"
 	"net"
 
+	"github.com/cajax/mylittleproxy/proto"
 	"github.com/koding/logging"
-	"github.com/koding/tunnel/proto"
 )
 
 var (
