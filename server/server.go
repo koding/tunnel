@@ -3,7 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/cajax/mylittleproxy"
+	"github.com/cajax/mylittleproxy/tunnel"
 	"go.uber.org/zap"
 	"log"
 	"net/http"
@@ -11,10 +11,10 @@ import (
 )
 
 func main() {
-	configPath := flag.String("c", "config.json", "Path to server config file")
+	configPath := flag.String("c", tunnel.GetExecutableDir()+string(os.PathSeparator)+"config.json", "Path to server config file")
 	flag.Parse()
 	var config Config
-	err := mylittleproxy.GetConfig(configPath, &config)
+	err := tunnel.GetConfig(configPath, &config)
 
 	if err != nil {
 		log.Printf("Unable to read config: %s", err)
@@ -23,27 +23,24 @@ func main() {
 
 	var logger *zap.Logger
 	if config.Debug {
-		logger, err = zap.NewDevelopment()
+		logger = zap.Must(zap.NewDevelopment())
 	} else {
-		logger, err = zap.NewProduction()
+		logger = zap.Must(zap.NewProduction())
 	}
 	defer logger.Sync()
-	if err != nil {
-		log.Panic(err)
-	}
 
 	fmt.Println("Running server with ", *configPath)
 
 	signatureKey := getSignatureKey(config, logger)
 
-	cfg := &mylittleproxy.ServerConfig{
+	cfg := &tunnel.ServerConfig{
 		SignatureKey:   signatureKey,
 		AllowedHosts:   config.AllowedHosts,
 		AllowedClients: config.AllowedClients,
 		Log:            logger,
 		ServeTCP:       config.ServeTCP,
 	}
-	server, _ := mylittleproxy.NewServer(cfg)
+	server, _ := tunnel.NewServer(cfg)
 	//server.AddHost("sub.example.com", "1234")
 	err = http.ListenAndServe(config.Listen, server)
 	if err != nil {

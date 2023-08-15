@@ -1,12 +1,11 @@
-package mylittleproxy
+package tunnel
 
 import (
+	"github.com/cajax/mylittleproxy/proto"
+	"github.com/koding/logging"
 	"io"
 	"net"
 	"sync"
-
-	"github.com/cajax/mylittleproxy/proto"
-	"github.com/koding/logging"
 )
 
 // ProxyFunc is responsible for forwarding a remote connection to local server and writing the response back.

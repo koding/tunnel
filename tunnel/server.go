@@ -1,7 +1,7 @@
 // package mylittleproxy is a server/client package that enables to proxy public
 // connections to your local machine over a tunnel connection from the local
 // machine to the public server.
-package mylittleproxy
+package tunnel
 
 import (
 	"bufio"

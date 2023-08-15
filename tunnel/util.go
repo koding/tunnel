@@ -1,4 +1,4 @@
-package mylittleproxy
+package tunnel
 
 import (
 	"crypto/sha1"
@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -151,4 +152,13 @@ func GetConfig(configPath *string, config any) error {
 
 	err = json.Unmarshal(configBytes, &config)
 	return nil
+}
+
+func GetExecutableDir() string {
+	ex, err := os.Executable()
+	if err != nil {
+		panic(err)
+	}
+	exPath := filepath.Dir(ex)
+	return exPath
 }

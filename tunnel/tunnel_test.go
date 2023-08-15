@@ -1,13 +1,13 @@
-package mylittleproxy_test
+package tunnel_test
 
 import (
 	"fmt"
+	"github.com/koding/tunnel/tunneltest"
 	"strconv"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/cajax/mylittleproxy/tunneltest"
 	"github.com/koding/tunnel"
 
 	"github.com/cenkalti/backoff"

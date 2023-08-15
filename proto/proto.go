@@ -26,6 +26,7 @@ type ConnectionConfig struct {
 
 type HTTPConfig struct {
 	Domain  string            `json:"domain"`
+	Target  string            `json:"target"`
 	Rewrite []HTTPRewriteRule `json:"rewrite"`
 }
 

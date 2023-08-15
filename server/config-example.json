@@ -1,6 +1,6 @@
 {
-  "Debug": true,
-  "Listen": ":8080",
+  "debug": false,
+  "listen": ":8080",
   "signatureKey": "secretkey",
   "allowedHosts": ["^.*\\.domain\\.com$"],
   "allowedClients": ["1234"],

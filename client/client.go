@@ -3,8 +3,8 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/cajax/mylittleproxy"
 	"github.com/cajax/mylittleproxy/proto"
+	"github.com/cajax/mylittleproxy/tunnel"
 	"go.uber.org/zap"
 	"log"
 	"os"
@@ -14,7 +14,7 @@ func main() {
 	configPath := getConfigPath()
 	flag.Parse()
 	var config Config
-	err := mylittleproxy.GetConfig(configPath, &config)
+	err := tunnel.GetConfig(configPath, &config)
 
 	if err != nil {
 		log.Printf("unable to read config: %s", err)
@@ -22,17 +22,13 @@ func main() {
 	}
 
 	fmt.Println("Running server with ", *configPath)
-
 	var logger *zap.Logger
 	if config.Debug {
-		logger, err = zap.NewDevelopment()
+		logger = zap.Must(zap.NewDevelopment())
 	} else {
-		logger, err = zap.NewProduction()
+		logger = zap.Must(zap.NewProduction())
 	}
 	defer logger.Sync()
-	if err != nil {
-		log.Panic(err)
-	}
 
 	identifier := getIdentifier(config, logger)
 	signatureKey := getSignatureKey(config, logger)
@@ -42,7 +38,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if config.LocalAddress == "" {
+	if config.Proxy.Http.Target == "" {
 		logger.Error("target local address must not be empty. Aborting")
 		os.Exit(1)
 	}
@@ -59,7 +55,7 @@ func main() {
 
 	tunnelConfig := getTunnelConfig(identifier, config, httpRewrites, signatureKey, logger)
 
-	client, err := mylittleproxy.NewClient(tunnelConfig)
+	client, err := tunnel.NewClient(tunnelConfig)
 	if err != nil {
 		logger.Panic("unable to initialize client", zap.Error(err))
 	}
@@ -67,17 +63,17 @@ func main() {
 	client.Start()
 }
 
-func getTunnelConfig(identifier string, config Config, httpRewrites []proto.HTTPRewriteRule, signatureKey string, logger *zap.Logger) *mylittleproxy.ClientConfig {
-	cfg := &mylittleproxy.ClientConfig{
+func getTunnelConfig(identifier string, config Config, httpRewrites []proto.HTTPRewriteRule, signatureKey string, logger *zap.Logger) *tunnel.ClientConfig {
+	cfg := &tunnel.ClientConfig{
 		Identifier: identifier,
 		ServerAddr: config.ServerAddress,
 		ConnectionConfig: proto.ConnectionConfig{
 			Http: proto.HTTPConfig{
 				Domain:  config.Proxy.Http.Domain,
+				Target:  config.Proxy.Http.Target,
 				Rewrite: httpRewrites,
 			},
 		},
-		LocalAddr:    config.LocalAddress,
 		SignatureKey: signatureKey,
 		Log:          logger,
 	}
@@ -85,7 +81,7 @@ func getTunnelConfig(identifier string, config Config, httpRewrites []proto.HTTP
 }
 
 func getConfigPath() *string {
-	configPath := flag.String("c", "config.json",
+	configPath := flag.String("c", tunnel.GetExecutableDir()+string(os.PathSeparator)+"config.json",
 		`Path to client config file
 Example of config file:
 {
@@ -138,7 +134,6 @@ func getSignatureKey(config Config, logger *zap.Logger) string {
 type Config struct {
 	Debug         bool             `json:"debug"`
 	Identifier    string           `json:"identifier"`
-	LocalAddress  string           `json:"LocalAddress"`
 	ServerAddress string           `json:"serverAddress"`
 	SignatureKey  string           `json:"signatureKey"`
 	Proxy         ConnectionConfig `json:"proxy"`
@@ -150,6 +145,7 @@ type ConnectionConfig struct {
 
 type HTTPConfig struct {
 	Domain  string            `json:"domain"`
+	Target  string            `json:"target"`
 	Rewrite []HTTPRewriteRule `json:"rewrite"`
 }
 

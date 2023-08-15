@@ -1,4 +1,4 @@
-package mylittleproxy
+package tunnel
 
 import (
 	"fmt"

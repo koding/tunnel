@@ -1,15 +1,15 @@
-package mylittleproxy
+package tunnel
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
-	"io"
-	"io/ioutil"
-	"net"
-	"net/http"
-
 	"github.com/cajax/mylittleproxy/proto"
 	"github.com/koding/logging"
+	"io"
+	"net"
+	"net/http"
+	"net/url"
 )
 
 var (
@@ -18,20 +18,13 @@ var (
 
 // HTTPProxy forwards HTTP traffic.
 //
-// When tunnel server requests a connection it's proxied to 127.0.0.1:incomingPort
-// where incomingPort is control message LocalPort.
-// Usually this is tunnel server's public exposed Port.
-// This behaviour can be changed by setting LocalAddr or FetchLocalAddr.
-// FetchLocalAddr takes precedence over LocalAddr.
-//
+// We take original request, replace host and protocol with target host and execute it. Returned data redirected to the yamux tunnel
 // When connection to local server cannot be established proxy responds with http error message.
 type HTTPProxy struct {
-	// LocalAddr defines the TCP address of the local server.
+	// TargetHost defines the TCP address of the local server.
 	// This is optional if you want to specify a single TCP address.
-	LocalAddr string
-	// FetchLocalAddr is used for looking up TCP address of the server.
-	// This is optional if you want to specify a dynamic TCP address based on incoming port.
-	FetchLocalAddr func(port int) (string, error)
+	TargetHost string
+
 	// ErrorResp is custom response send to tunnel server when client cannot
 	// establish connection to local server. If not set a default "no local server"
 	// response is sent.
@@ -47,35 +40,29 @@ func (p *HTTPProxy) Proxy(remote net.Conn, msg *proto.ControlMessage) {
 		panic("Proxy mismatch")
 	}
 
-	var log = p.log()
+	req, err := http.ReadRequest(bufio.NewReader(remote))
 
-	var port = msg.LocalPort
-	if port == 0 {
-		port = 80
-	}
+	p.patchRequest(req)
 
-	var localAddr = fmt.Sprintf("127.0.0.1:%d", port)
-	if p.LocalAddr != "" {
-		localAddr = p.LocalAddr
-	} else if p.FetchLocalAddr != nil {
-		l, err := p.FetchLocalAddr(msg.LocalPort)
-		if err != nil {
-			log.Warning("Failed to get custom local address: %s", err)
-			p.sendError(remote)
-			return
-		}
-		localAddr = l
-	}
+	res, err := http.DefaultClient.Do(req)
 
-	log.Debug("Dialing local server %q", localAddr)
-	local, err := net.DialTimeout("tcp", localAddr, defaultTimeout)
+	fmt.Println(res, err)
 	if err != nil {
-		log.Error("Dialing local server %q failed: %s", localAddr, err)
+		p.log().Warning("Failed remote request", req.URL.String(), err)
 		p.sendError(remote)
 		return
 	}
 
-	Join(local, remote, log)
+	res.Write(remote)
+	return
+}
+
+func (p *HTTPProxy) patchRequest(req *http.Request) {
+	targetUrl, _ := url.Parse(p.TargetHost)
+	path := req.URL.Path
+	req.RequestURI = ""
+	req.URL = targetUrl
+	req.URL.Path = path
 }
 
 func (p *HTTPProxy) sendError(remote net.Conn) {
@@ -102,7 +89,7 @@ func noLocalServer() *http.Response {
 		Proto:         "HTTP/1.1",
 		ProtoMajor:    1,
 		ProtoMinor:    1,
-		Body:          ioutil.NopCloser(body),
+		Body:          io.NopCloser(body),
 		ContentLength: int64(body.Len()),
 	}
 }

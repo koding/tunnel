@@ -1,12 +1,12 @@
 {
   "debug": true,
   "identifier": "1234",
-  "localAddress": "my.localhost.com:80",
   "serverAddress": "localhost:8080",
   "signatureKey": "secretkey",
   "proxy": {
     "http": {
       "domain": "1234.domain.com",
+      "target": "https://localhost",
       "rewrite": [
         {
           "from": "/test",

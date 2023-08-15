@@ -1,4 +1,4 @@
-package mylittleproxy
+package tunnel
 
 import (
 	"bufio"
@@ -166,10 +166,6 @@ type ClientConfig struct {
 
 	// DEPRECATED:
 
-	// LocalAddr is DEPRECATED please use ProxyHTTP.LocalAddr, see ProxyOverwrite for more details.
-	LocalAddr string
-
-	// FetchLocalAddr is DEPRECATED please use ProxyTCP.FetchLocalAddr, see ProxyOverwrite for more details.
 	FetchLocalAddr func(port int) (string, error)
 
 	// Settings sent to server for given client
@@ -193,10 +189,6 @@ func (c *ClientConfig) verify() error {
 		}
 	}
 
-	if c.Proxy != nil && (c.LocalAddr != "" || c.FetchLocalAddr != nil) {
-		return errors.New("both Proxy and LocalAddr or FetchLocalAddr are set")
-	}
-
 	return nil
 }
 
@@ -218,18 +210,11 @@ func NewClient(cfg *ClientConfig) (*Client, error) {
 	if cfg.Proxy != nil {
 		proxy = cfg.Proxy
 	}
-	// DEPRECATED API SUPPORT
-	if cfg.LocalAddr != "" || cfg.FetchLocalAddr != nil {
-		var f ProxyFuncs
-		if cfg.LocalAddr != "" {
-			f.HTTP = (&HTTPProxy{LocalAddr: cfg.LocalAddr}).Proxy
-			f.WS = (&HTTPProxy{LocalAddr: cfg.LocalAddr}).Proxy
-		}
-		if cfg.FetchLocalAddr != nil {
-			f.TCP = (&TCPProxy{FetchLocalAddr: cfg.FetchLocalAddr}).Proxy
-		}
-		proxy = Proxy(f)
-	}
+
+	var f ProxyFuncs
+	f.HTTP = (&HTTPProxy{TargetHost: cfg.ConnectionConfig.Http.Target}).Proxy
+	f.WS = (&HTTPProxy{TargetHost: cfg.ConnectionConfig.Http.Target}).Proxy
+	proxy = Proxy(f)
 
 	var bo Backoff = newForeverBackoff()
 	if cfg.Backoff != nil {
@@ -471,9 +456,6 @@ func (c *Client) connect(identifier, serverAddr string, signatureKey string) err
 	req.Header.Set(proto.ClientIdentifierHeader, identifier)
 
 	req.Header.Set(proto.ClientIdentifierSignature, signIdentifier(identifier, signatureKey))
-
-	c.log.Debug("Writing request", zap.Any("reques", req))
-
 	if err := req.Write(conn); err != nil {
 		return fmt.Errorf("writing CONNECT request to %s failed: %s", req.URL, err)
 	}

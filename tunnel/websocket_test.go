@@ -1,4 +1,4 @@
-package mylittleproxy_test
+package tunnel_test
 
 import (
 	"fmt"

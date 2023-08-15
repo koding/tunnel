@@ -1,91 +1,73 @@
-# Tunnel [![GoDoc](http://img.shields.io/badge/go-documentation-blue.svg?style=flat-square)](http://godoc.org/github.com/koding/tunnel) [![Go Report Card](https://goreportcard.com/badge/github.com/koding/tunnel)](https://goreportcard.com/report/github.com/koding/tunnel) [![Build Status](http://img.shields.io/travis/koding/tunnel.svg?style=flat-square)](https://travis-ci.org/koding/tunnel)
+# MyLittleProxy
 
-Tunnel is a server/client package that enables to proxy public connections to
-your local machine over a tunnel connection from the local machine to the
-public server. What this means is, you can share your localhost even if it
-doesn't have a Public IP or if it's not reachable from outside. 
+MyLittleProxy is a reverse proxy for cases where you cannot or do not want to expose entire development or testing environment to extranet, but also need to test an endpoint or single page.
 
-It uses the excellent [yamux](https://github.com/hashicorp/yamux) package to
-multiplex connections between server and client.
+For example, you need to test an Oauth flow or web callback from third-part service.
 
-The project is under active development, please vendor it if you want to use it.
-
-# Usage
-
-The tunnel package consists of two parts. The `server` and the `client`. 
-
-Server is the public facing part. It's type that satisfies the `http.Handler`.
-So it's easily pluggable into existing servers. 
+It is based on the modified [koding/tunnel](https://github.com/koding/tunnel) lib. 
+## How it works
+Server side receives incoming HTTP connections and tunnels them to clients based on assigned domain names. Replies from clients are forwarded to requesting side via the same tunnel. 
 
 
-Let assume that you setup your DNS service so all `*.example.com` domains route
-to your server at the public IP `203.0.113.0`. Let us first create the server
-part:
+## How to setup the server
+1. First you need a machine exposed to extranet. It will receive HTTP commands from clients and incoming requests from web.
+_As of now server doesn't implement HTTPS connections, so you may want to set it up behind nginx or other proxy._
 
-```go
-package main
-
-import (
-	"net/http"
-
-	"github.com/koding/tunnel"
-)
-
-func main() {
-	cfg := &tunnel.ServerConfig{}
-	server, _ := tunnel.NewServer(cfg)
-	server.AddHost("sub.example.com", "1234")
-	http.ListenAndServe(":80", server)
+2. Configure the server
+```json
+{
+  "debug": true,
+  "listen": ":8080",
+  "signatureKey": "secretkey",
+  "allowedHosts": ["^.*\\.domain\\.com$"],
+  "allowedClients": ["1234"],
+  "serveTCP": false
 }
 ```
+* `debug` enable more human-readable log format
+* `listen` IP and port to listen to for incoming connections. This includes both control connections from clients and requests from web
+* `signatureKey` A secret key you share between server and clients. Client will use it to sign its identifier while communicating with server
+* `allowedHosts` List of regex rules to filter allowed domains names. If requested URL didn't match any it will fail with error 400
+* `allowedClient` List of client IDs allowed to use this server. If this list is empty then any client with valid signature will be allowed to connect
+* `serveTCP` Enable TCP proxying. This proxy type remains from underlying `koding/tunnel` project and wasn't really tested. Keep it disabled unless you know what are you doing
 
-Once you create the `server`, you just plug it into your server. The only
-detail here is to map a virtualhost to a secret token. The secret token is the
-only part that needs to be known for the client side.
+3. Run `server -c path/to/config.json` or just `server` if the `config.json` is in the same directory
 
-Let us now create the client side part:
-
-```go
-package main
-
-import "github.com/koding/tunnel"
-
-func main() {
-	cfg := &tunnel.ClientConfig{
-		Identifier: "1234",
-		ServerAddr: "203.0.113.0:80",
-	}
-
-	client, err := tunnel.NewClient(cfg)
-	if err != nil {
-		panic(err)
-	}
-
-	client.Start()
+## How to setup the client
+1. Configure client
+```json
+{
+  "debug": true,
+  "identifier": "1234",
+  "serverAddress": "localhost:8080",
+  "signatureKey": "secretkey",
+  "proxy": {
+    "http": {
+      "domain": "1234.domain.com",
+      "target": "https://local.host",
+      "rewrite": [
+        {
+          "from": "/test",
+          "to": "/api/test"
+        }
+      ]
+    }
+  }
 }
 ```
+* `debug` enable more human-readable log format
+* `identifier` set custom identifier. Leave empty if you want to automatically use the host name. If you use multiple instances of the same container image or VM with the same host name you really should set custom identifier per instance.
+* `serverAddress` address of proxy server
+* `signatureKey` secret key shared between server and client to sign control calls from client
+* `proxy.http.domain` is the desired domain at the server side that will be routed to this client
+* `proxy.http.target` is the target host protocol and port. Requests will be routed to this host
+* `proxy.http.rewrite` list of Regex expressions to rewrite paths in URLs. This list must contain at least one and may be as simple as a pair `/ -> /` but then you risk to expose entire local web server. Only requests with matched path will be routed to client. You may use capture groups and replacement.
 
-The `Start()` method is by default blocking. As you see you, we just passed the
-server address and the secret token. 
-
-Now whenever someone hit `sub.example.com`, the request will be proxied to the
-machine where client is running and hit the local server running `127.0.0.1:80`
-(assuming there is one). If someone hits `sub.example.com:3000` (assume your
-server is running at this port), it'll be routed to `127.0.0.1:3000`
-
-That's it. 
-
-There are many options that can be changed, such as a static local address for
-your client. Have alook at the
-[documentation](http://godoc.org/github.com/koding/tunnel)
+2. Run `client -c path/to/config.json` or just `client` if the `config.json` is in the same directory
 
 
-# Protocol
-
-The server/client protocol is written in the [spec.md](spec.md) file. Please
-have a look for more detail.
 
 
-## License
+# License
 
 The BSD 3-Clause License - see LICENSE for more details
