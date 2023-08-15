@@ -1,12 +1,13 @@
-package tunnel
+package mylittleproxy
 
 import (
+	"regexp"
 	"sync"
 )
 
 type vhostStorage interface {
 	// AddHost adds the given host and identifier to the storage
-	AddHost(host, identifier string)
+	AddHost(host, identifier string, rewrites []HTTPRewriteRule)
 
 	// DeleteHost deletes the given host
 	DeleteHost(host string)
@@ -14,12 +15,22 @@ type vhostStorage interface {
 	// GetHost returns the host name for the given identifier
 	GetHost(identifier string) (string, bool)
 
+	// GetVirtualHost returns entire virtualhost info for the given identifier
+	GetVirtualHost(identifier string) (*virtualHost, bool)
+
 	// GetIdentifier returns the identifier for the given host
 	GetIdentifier(host string) (string, bool)
 }
 
 type virtualHost struct {
 	identifier string
+	Rewrite    []HTTPRewriteRule
+	TargetHost string
+}
+
+type HTTPRewriteRule struct {
+	re          *regexp.Regexp
+	replacement string
 }
 
 // virtualHosts is used for mapping host to users example: host
@@ -37,9 +48,9 @@ func newVirtualHosts() *virtualHosts {
 	}
 }
 
-func (v *virtualHosts) AddHost(host, identifier string) {
+func (v *virtualHosts) AddHost(host, identifier string, rewrites []HTTPRewriteRule) {
 	v.Lock()
-	v.mapping[host] = &virtualHost{identifier: identifier}
+	v.mapping[host] = &virtualHost{identifier: identifier, Rewrite: rewrites}
 	v.Unlock()
 }
 
@@ -74,4 +85,17 @@ func (v *virtualHosts) GetHost(identifier string) (string, bool) {
 	}
 
 	return "", false
+}
+
+func (v *virtualHosts) GetVirtualHost(identifier string) (*virtualHost, bool) {
+	v.Lock()
+	defer v.Unlock()
+
+	for _, hst := range v.mapping {
+		if hst.identifier == identifier {
+			return hst, true
+		}
+	}
+
+	return nil, false
 }

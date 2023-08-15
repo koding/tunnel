@@ -1,4 +1,4 @@
-package tunnel_test
+package mylittleproxy_test
 
 import (
 	"bufio"
@@ -14,8 +14,8 @@ import (
 	"os"
 	"time"
 
+	"github.com/cajax/mylittleproxy/tunneltest"
 	"github.com/koding/tunnel"
-	"github.com/koding/tunnel/tunneltest"
 
 	"github.com/gorilla/websocket"
 )

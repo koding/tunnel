@@ -1,12 +1,10 @@
-package tunnel_test
+package mylittleproxy_test
 
 import (
 	"fmt"
 	"net/http"
 	"reflect"
 	"testing"
-
-	"github.com/koding/tunnel/tunneltest"
 )
 
 func testWebsocket(name string, n int, t *testing.T, tt *tunneltest.TunnelTest) {

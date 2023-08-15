@@ -1,12 +1,11 @@
-package tunnel
+package mylittleproxy
 
 import (
+	"go.uber.org/zap"
 	"net"
 	"strconv"
 	"sync"
 	"sync/atomic"
-
-	"github.com/koding/logging"
 )
 
 type listener struct {
@@ -23,7 +22,7 @@ type listener struct {
 
 type vaddrOptions struct {
 	connCh chan<- net.Conn
-	log    logging.Logger
+	log    *zap.Logger
 }
 
 type vaddrStorage struct {
@@ -49,12 +48,12 @@ func (l *listener) serve() {
 	for {
 		conn, err := l.Accept()
 		if err != nil {
-			l.log.Error("failue listening on %q: %s", l.Addr(), err)
+			l.log.Error("failue listening", zap.Any("address", l.Addr()), zap.Error(err))
 			return
 		}
 
 		if atomic.LoadInt32(&l.done) != 0 {
-			l.log.Debug("stopped serving %q", l.Addr())
+			l.log.Debug("stopped serving", zap.Any("address", l.Addr()))
 			conn.Close()
 			return
 		}
@@ -152,7 +151,7 @@ func (vaddr *vaddrStorage) getIdent(conn net.Conn) (string, bool) {
 
 	ip, port, err := parseHostPort(conn.LocalAddr().String())
 	if err != nil {
-		vaddr.log.Debug("failed to get identifier for connection %q: %s", conn.LocalAddr(), err)
+		vaddr.log.Debug("failed to get identifier for connection", zap.Any("address", conn.LocalAddr()), zap.Error(err))
 		return "", false
 	}
 

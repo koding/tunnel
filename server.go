@@ -1,24 +1,28 @@
-// Package tunnel is a server/client package that enables to proxy public
+// package mylittleproxy is a server/client package that enables to proxy public
 // connections to your local machine over a tunnel connection from the local
 // machine to the public server.
-package tunnel
+package mylittleproxy
 
 import (
 	"bufio"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/koding/logging"
+	"go.uber.org/zap"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
 	"path"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/koding/logging"
-	"github.com/koding/tunnel/proto"
+	"github.com/cajax/mylittleproxy/proto"
 
 	"github.com/hashicorp/yamux"
 )
@@ -76,7 +80,18 @@ type Server struct {
 	// yamuxConfig is passed to new yamux.Session's
 	yamuxConfig *yamux.Config
 
-	log logging.Logger
+	log *zap.Logger
+
+	// Key used to signIdentifier Identifier
+	signatureKey string
+	// List of regex rules for valid hosts
+	allowedHosts []string
+
+	// List of allowed clients. Allows any if list is empty
+	allowedClients []string
+
+	// Whether enable TCP proxy
+	ServeTCP bool
 }
 
 // ServerConfig defines the configuration for the Server
@@ -93,15 +108,24 @@ type ServerConfig struct {
 	// before sending to client. If nil no modifications are done.
 	Director func(*http.Request)
 
-	// Debug enables debug mode, enable only if you want to debug the server
-	Debug bool
-
-	// Log defines the logger. If nil a default logging.Logger is used.
-	Log logging.Logger
+	// Log defines the logger. If nil a default zap production is used.
+	Log *zap.Logger
 
 	// YamuxConfig defines the config which passed to every new yamux.Session. If nil
 	// yamux.DefaultConfig() is used.
 	YamuxConfig *yamux.Config
+
+	// Key used to signIdentifier Identifier
+	SignatureKey string
+
+	// List of regex rules for valid hosts
+	AllowedHosts []string
+
+	//List of allowed clients. Allows any if list is empty
+	AllowedClients []string
+
+	// Whether enable TCP proxy
+	ServeTCP bool
 }
 
 // NewServer creates a new Server. The defaults are used if config is nil.
@@ -115,7 +139,7 @@ func NewServer(cfg *ServerConfig) (*Server, error) {
 		yamuxConfig = cfg.YamuxConfig
 	}
 
-	log := newLogger("tunnel-server", cfg.Debug)
+	log, _ := zap.NewProduction()
 	if cfg.Log != nil {
 		log = cfg.Log
 	}
@@ -141,9 +165,15 @@ func NewServer(cfg *ServerConfig) (*Server, error) {
 		yamuxConfig:           yamuxConfig,
 		connCh:                connCh,
 		log:                   log,
+		signatureKey:          cfg.SignatureKey,
+		allowedHosts:          cfg.AllowedHosts,
+		allowedClients:        cfg.AllowedClients,
+		ServeTCP:              cfg.ServeTCP,
 	}
 
-	go s.serveTCP()
+	if s.ServeTCP {
+		go s.serveTCP()
+	}
 
 	return s, nil
 }
@@ -161,7 +191,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if err := s.handleHTTP(w, r); err != nil {
 		if !strings.Contains(err.Error(), "no virtual host available") { // this one is outputted too much, unnecessarily
-			s.log.Error("remote %s (%s): %s", r.RemoteAddr, r.RequestURI, err)
+			s.log.Error("remote HTTP call failed", zap.String("address", r.RemoteAddr), zap.String("request_uri", r.RequestURI), zap.Error(err))
 		}
 		http.Error(w, err.Error(), http.StatusBadGateway)
 	}
@@ -169,8 +199,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // handleHTTP handles a single HTTP request
 func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) error {
-	s.log.Debug("HandleHTTP request:")
-	s.log.Debug("%v", r)
+	s.log.Debug("HandleHTTP request", zap.Any("request", r))
 
 	if s.httpDirector != nil {
 		s.httpDirector(r)
@@ -188,7 +217,7 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		// no need to return, just continue lazily, port will be 0, which in
 		// our case will be proxied to client's local servers port 80
-		s.log.Debug("No port available for %q, sending port 80 to client", hostPort)
+		s.log.Debug("No port available , sending port 80 to client", zap.String("port", hostPort))
 	}
 
 	// get the identifier associated with this host
@@ -200,6 +229,8 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) error {
 			return fmt.Errorf("no virtual host available for %q", hostPort)
 		}
 	}
+
+	s.rewriteRequest(r, identifier)
 
 	if isWebsocketConn(r) {
 		s.log.Debug("handling websocket connection")
@@ -229,12 +260,12 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) error {
 	defer func() {
 		if resp.Body != nil {
 			if err := resp.Body.Close(); err != nil && err != io.ErrUnexpectedEOF {
-				s.log.Error("resp.Body Close error: %s", err.Error())
+				s.log.Error("resp.Body Close error", zap.Error(err))
 			}
 		}
 	}()
 
-	s.log.Debug("Response received, writing back to public connection: %+v", resp)
+	s.log.Debug("Response received, writing back to public connection", zap.Any("response", resp))
 
 	copyHeader(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
@@ -243,11 +274,33 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) error {
 		if err == io.ErrUnexpectedEOF {
 			s.log.Debug("Client closed the connection, couldn't copy response")
 		} else {
-			s.log.Error("copy err: %s", err) // do not return, because we might write multipe headers
+			s.log.Error("copy err", zap.Error(err)) // do not return, because we might write multipe headers
 		}
 	}
 
 	return nil
+}
+
+// rewriteRequest replaces target host and path with regex rules
+func (s *Server) rewriteRequest(r *http.Request, identifier string) bool {
+	log.Println(r)
+
+	//r.URL.Host = host
+	vh, ok := s.virtualHosts.GetVirtualHost(identifier)
+
+	if !ok {
+		return false
+	}
+
+	r.Host = vh.TargetHost
+	for _, rewrite := range vh.Rewrite {
+		if rewrite.re.MatchString(r.URL.Path) {
+			r.URL.Path = rewrite.re.ReplaceAllString(r.URL.Path, rewrite.replacement)
+			return true
+		}
+	}
+	log.Println(r)
+	return false
 }
 
 func (s *Server) serveTCP() {
@@ -259,7 +312,7 @@ func (s *Server) serveTCP() {
 func (s *Server) serveTCPConn(conn net.Conn) {
 	err := s.handleTCPConn(conn)
 	if err != nil {
-		s.log.Warning("failed to serve %q: %s", conn.RemoteAddr(), err)
+		s.log.Warn("failed to serve ", zap.Any("address", conn.RemoteAddr()), zap.Error(err))
 		conn.Close()
 	}
 }
@@ -337,9 +390,9 @@ func (s *Server) handleTCPConn(conn net.Conn) error {
 func (s *Server) proxy(wg *sync.WaitGroup, dst, src net.Conn) {
 	defer wg.Done()
 
-	s.log.Debug("tunneling %s -> %s", src.RemoteAddr(), dst.RemoteAddr())
+	s.log.Debug("tunneling", zap.Any("from", src.RemoteAddr()), zap.Any("to", dst.RemoteAddr()))
 	n, err := io.Copy(dst, src)
-	s.log.Debug("tunneled %d bytes %s -> %s: %v", n, src.RemoteAddr(), dst.RemoteAddr(), err)
+	s.log.Debug("tunneled %d bytes %s -> %s: %v", zap.Int64("bytes", n), zap.Any("from", src.RemoteAddr()), zap.Any("to", dst.RemoteAddr()), zap.Error(err))
 }
 
 func (s *Server) dial(identifier string, p proto.Type, port int) (net.Conn, error) {
@@ -359,7 +412,7 @@ func (s *Server) dial(identifier string, p proto.Type, port int) (net.Conn, erro
 		LocalPort: port,
 	}
 
-	s.log.Debug("Sending control msg %+v", msg)
+	s.log.Debug("Sending control msg", zap.Any("message", msg))
 
 	// ask client to open a session to us, so we can accept it
 	if err := control.send(msg); err != nil {
@@ -393,6 +446,12 @@ func (s *Server) dial(identifier string, p proto.Type, port int) (net.Conn, erro
 // tunnel TCP connections.
 func (s *Server) controlHandler(w http.ResponseWriter, r *http.Request) (ctErr error) {
 	identifier := r.Header.Get(proto.ClientIdentifierHeader)
+	signature := r.Header.Get(proto.ClientIdentifierSignature)
+
+	if !checkIdentifierSignature(identifier, s.signatureKey, signature) {
+		return fmt.Errorf("invalid identity signature", identifier)
+	}
+
 	_, ok := s.getHost(identifier)
 	if !ok {
 		return fmt.Errorf("no host associated for identifier %s. please use server.AddHost()", identifier)
@@ -403,11 +462,11 @@ func (s *Server) controlHandler(w http.ResponseWriter, r *http.Request) (ctErr e
 		ct.Close()
 		s.deleteControl(identifier)
 		s.deleteSession(identifier)
-		s.log.Warning("Control connection for %q already exists. This is a race condition and needs to be fixed on client implementation", identifier)
+		s.log.Warn("Control connection for %q already exists. This is a race condition and needs to be fixed on client implementation", zap.String("identifier", identifier))
 		return fmt.Errorf("control conn for %s already exist. \n", identifier)
 	}
 
-	s.log.Debug("Tunnel with identifier %s", identifier)
+	s.log.Debug("Tunnel with identifier", zap.String("identifier", identifier))
 
 	hj, ok := w.(http.Hijacker)
 	if !ok {
@@ -493,7 +552,7 @@ func (s *Server) listenControl(ct *control) {
 		err := ct.dec.Decode(&msg)
 		if err != nil {
 			host, _ := s.getHost(ct.identifier)
-			s.log.Debug("Closing client connection: '%s', %s'", host, ct.identifier)
+			s.log.Debug("Closing client connection", zap.String("host", host), zap.String("identifier", ct.identifier))
 
 			// close client connection so it reconnects again
 			ct.Close()
@@ -505,7 +564,7 @@ func (s *Server) listenControl(ct *control) {
 			s.onDisconnect(ct.identifier, err)
 
 			if err != io.EOF {
-				s.log.Error("decode err: %s", err)
+				s.log.Error("decode err", zap.Error(err))
 			}
 			return
 		}
@@ -513,7 +572,7 @@ func (s *Server) listenControl(ct *control) {
 		// right now we don't do anything with the messages, but because the
 		// underlying connection needs to establihsed, we know when we have
 		// disconnection(above), so we can cleanup the connection.
-		s.log.Debug("msg: %s", msg)
+		s.log.Debug("msg", zap.Any("message", msg))
 	}
 }
 
@@ -529,7 +588,7 @@ func (s *Server) OnConnect(identifier string, fn func() error) {
 // or stateChanges chanel readers) when client connects.
 func (s *Server) onConnect(identifier string) {
 	if err := s.onConnectCallbacks.call(identifier); err != nil {
-		s.log.Error("OnConnect: error calling callback for %q: %s", identifier, err)
+		s.log.Error("OnConnect: error calling callback", zap.String("identifier", identifier), zap.Error(err))
 	}
 
 	s.changeState(identifier, ClientConnected, nil)
@@ -547,7 +606,7 @@ func (s *Server) OnDisconnect(identifier string, fn func() error) {
 // or stateChanges chanel readers) when client disconnects.
 func (s *Server) onDisconnect(identifier string, err error) {
 	if err := s.onDisconnectCallbacks.call(identifier); err != nil {
-		s.log.Error("OnDisconnect: error calling callback for %q: %s", identifier, err)
+		s.log.Error("OnDisconnect: error calling callback", zap.String("identifier", identifier), zap.Error(err))
 	}
 
 	s.changeState(identifier, ClientClosed, err)
@@ -571,7 +630,7 @@ func (s *Server) changeState(identifier string, state ClientState, err error) (p
 		select {
 		case s.stateCh <- change:
 		default:
-			s.log.Warning("Dropping state change due to slow reader: %s", change)
+			s.log.Warn("Dropping state change due to slow reader", zap.Any("change", change))
 		}
 	}
 
@@ -579,8 +638,8 @@ func (s *Server) changeState(identifier string, state ClientState, err error) (p
 }
 
 // AddHost adds the given virtual host and maps it to the identifier.
-func (s *Server) AddHost(host, identifier string) {
-	s.virtualHosts.AddHost(host, identifier)
+func (s *Server) AddHost(host, identifier string, rewrites []HTTPRewriteRule) {
+	s.virtualHosts.AddHost(host, identifier, rewrites)
 }
 
 // DeleteHost deletes the given virtual host. Once removed any request to this
@@ -686,16 +745,82 @@ func (s *Server) checkConnect(fn func(w http.ResponseWriter, r *http.Request) er
 			return
 		}
 
-		if err := fn(w, r); err != nil {
-			s.log.Error("Handler err: %v", err.Error())
+		identifier := r.Header.Get(proto.ClientIdentifierHeader)
+		signature := r.Header.Get(proto.ClientIdentifierSignature)
 
-			if identifier := r.Header.Get(proto.ClientIdentifierHeader); identifier != "" {
+		if !s.checkIdentifier(identifier) {
+			http.Error(w, "403 Forbidden", http.StatusForbidden)
+			return
+		}
+
+		if !checkIdentifierSignature(identifier, s.signatureKey, signature) {
+			http.Error(w, "403 invalid signature\n", http.StatusForbidden)
+			return
+		}
+
+		decoder := json.NewDecoder(r.Body)
+		var t proto.ConnectionConfig
+		err := decoder.Decode(&t)
+		if err != nil {
+			http.Error(w, "400 invalid connection config\n", http.StatusBadRequest)
+			return
+		}
+
+		if !s.checkHost(t.Http.Domain) {
+			http.Error(w, "400 invalid host name\n", http.StatusBadRequest)
+			return
+		}
+
+		rules := s.convertHTTPPathRules(t)
+
+		s.AddHost(t.Http.Domain, identifier, rules)
+
+		if err := fn(w, r); err != nil {
+			s.log.Error("Handler err", zap.Error(err))
+
+			if identifier != "" {
 				s.onDisconnect(identifier, err)
 			}
 
 			http.Error(w, err.Error(), 502)
 		}
 	})
+}
+
+// convertHTTPPathRules converts rules received from client to regex rules
+func (s *Server) convertHTTPPathRules(t proto.ConnectionConfig) []HTTPRewriteRule {
+	rules := make([]HTTPRewriteRule, 0)
+	for _, r := range t.Http.Rewrite {
+		rules = append(rules, HTTPRewriteRule{regexp.MustCompile(r.From), r.To})
+	}
+	return rules
+}
+
+// checkIdentifier checks if identifier is in the allowed list
+func (s *Server) checkIdentifier(identifier string) bool {
+	if len(s.allowedClients) == 0 {
+		return true
+	}
+
+	for _, c := range s.allowedClients {
+		if c == identifier {
+			return true
+		}
+	}
+
+	return false
+}
+
+// checkHost verifies that client's desired domain matches at least one of regex rules in allow list
+func (s *Server) checkHost(host string) bool {
+	for _, h := range s.allowedHosts {
+		re := regexp.MustCompile(h)
+		if re.MatchString(host) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func parseHostPort(addr string) (string, int, error) {

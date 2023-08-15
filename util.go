@@ -1,13 +1,18 @@
-package tunnel
+package mylittleproxy
 
 import (
+	"crypto/sha1"
 	"crypto/tls"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net"
+	"os"
 	"sync"
 	"time"
 
-	"github.com/koding/tunnel/proto"
+	"github.com/cajax/mylittleproxy/proto"
 
 	"github.com/cenkalti/backoff"
 )
@@ -118,4 +123,32 @@ func scheme(conn net.Conn) (scheme string) {
 	}
 
 	return
+}
+
+func signIdentifier(id string, key string) string {
+	// TODO replace with asymmetric encryption
+	sha := sha1.New()
+	sha.Write([]byte(id + ":" + key))
+	return base64.URLEncoding.EncodeToString(sha.Sum(nil))
+}
+
+func checkIdentifierSignature(id string, key string, signature string) bool {
+	return signature == signIdentifier(id, key)
+}
+
+func GetConfig(configPath *string, config any) error {
+	configFile, err := os.Open(*configPath)
+	if err != nil {
+		return err
+	}
+	// defer the closing of our configFile so that we can parse it later on
+	defer configFile.Close()
+
+	configBytes, err := io.ReadAll(configFile)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(configBytes, &config)
+	return nil
 }
