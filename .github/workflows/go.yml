@@ -21,8 +21,7 @@ jobs:
       with:
         go-version: '1.20'
     - name: Install dependencies
-        run: |
-          go gmod download
+      run: go mod download
 
     - name: Build
       run: go build -v build/client client/client.go
