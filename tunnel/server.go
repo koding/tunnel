@@ -52,12 +52,6 @@ type Server struct {
 	// virtualHosts is used to map public hosts to remote clients.
 	virtualHosts vhostStorage
 
-	// virtualAddrs.
-	virtualAddrs *vaddrStorage
-
-	// connCh is used to publish accepted connections for tcp tunnels.
-	connCh chan net.Conn
-
 	// onConnectCallbacks contains client callbacks called when control
 	// session is established for a client with given identifier.
 	onConnectCallbacks *callbacks
@@ -89,9 +83,6 @@ type Server struct {
 
 	// List of allowed clients. Allows any if list is empty
 	allowedClients []string
-
-	// Whether enable TCP proxy
-	ServeTCP bool
 }
 
 // ServerConfig defines the configuration for the Server
@@ -123,9 +114,6 @@ type ServerConfig struct {
 
 	//List of allowed clients. Allows any if list is empty
 	AllowedClients []string
-
-	// Whether enable TCP proxy
-	ServeTCP bool
 }
 
 // NewServer creates a new Server. The defaults are used if config is nil.
@@ -144,35 +132,21 @@ func NewServer(cfg *ServerConfig) (*Server, error) {
 		log = cfg.Log
 	}
 
-	connCh := make(chan net.Conn)
-
-	opts := &vaddrOptions{
-		connCh: connCh,
-		log:    log,
-	}
-
 	s := &Server{
 		pending:               make(map[string]chan net.Conn),
 		sessions:              make(map[string]*yamux.Session),
 		onConnectCallbacks:    newCallbacks("OnConnect"),
 		onDisconnectCallbacks: newCallbacks("OnDisconnect"),
 		virtualHosts:          newVirtualHosts(),
-		virtualAddrs:          newVirtualAddrs(opts),
 		controls:              newControls(),
 		states:                make(map[string]ClientState),
 		stateCh:               cfg.StateChanges,
 		httpDirector:          cfg.Director,
 		yamuxConfig:           yamuxConfig,
-		connCh:                connCh,
 		log:                   log,
 		signatureKey:          cfg.SignatureKey,
 		allowedHosts:          cfg.AllowedHosts,
 		allowedClients:        cfg.AllowedClients,
-		ServeTCP:              cfg.ServeTCP,
-	}
-
-	if s.ServeTCP {
-		go s.serveTCP()
 	}
 
 	return s, nil
@@ -303,20 +277,6 @@ func (s *Server) rewriteRequest(r *http.Request, identifier string) bool {
 	return false
 }
 
-func (s *Server) serveTCP() {
-	for conn := range s.connCh {
-		go s.serveTCPConn(conn)
-	}
-}
-
-func (s *Server) serveTCPConn(conn net.Conn) {
-	err := s.handleTCPConn(conn)
-	if err != nil {
-		s.log.Warn("failed to serve ", zap.Any("address", conn.RemoteAddr()), zap.Error(err))
-		conn.Close()
-	}
-}
-
 func (s *Server) handleWSConn(w http.ResponseWriter, r *http.Request, ident string, port int) error {
 	hj, ok := w.(http.Hijacker)
 	if !ok {
@@ -347,33 +307,6 @@ func (s *Server) handleWSConn(w http.ResponseWriter, r *http.Request, ident stri
 	if err := resp.Write(conn); err != nil {
 		err = errors.New("unable to write upgrade response: " + err.Error())
 		return nonil(err, stream.Close())
-	}
-
-	var wg sync.WaitGroup
-	wg.Add(2)
-
-	go s.proxy(&wg, conn, stream)
-	go s.proxy(&wg, stream, conn)
-
-	wg.Wait()
-
-	return nonil(stream.Close(), conn.Close())
-}
-
-func (s *Server) handleTCPConn(conn net.Conn) error {
-	ident, ok := s.virtualAddrs.getIdent(conn)
-	if !ok {
-		return fmt.Errorf("no virtual address available for %s", conn.LocalAddr())
-	}
-
-	_, port, err := parseHostPort(conn.LocalAddr().String())
-	if err != nil {
-		return err
-	}
-
-	stream, err := s.dial(ident, proto.TCP, port)
-	if err != nil {
-		return err
 	}
 
 	var wg sync.WaitGroup
@@ -646,29 +579,6 @@ func (s *Server) AddHost(host, identifier string, rewrites []HTTPRewriteRule) {
 // host is denied.
 func (s *Server) DeleteHost(host string) {
 	s.virtualHosts.DeleteHost(host)
-}
-
-// AddAddr starts accepting connections on listener l, routing every connection
-// to a tunnel client given by the identifier.
-//
-// When ip parameter is nil, all connections accepted from the listener are
-// routed to the tunnel client specified by the identifier (port-based routing).
-//
-// When ip parameter is non-nil, only those connections are routed whose local
-// address matches the specified ip (ip-based routing).
-//
-// If l listens on multiple interfaces it's desirable to call AddAddr multiple
-// times with the same l value but different ip one.
-func (s *Server) AddAddr(l net.Listener, ip net.IP, identifier string) {
-	s.virtualAddrs.Add(l, ip, identifier)
-}
-
-// DeleteAddr stops listening for connections on the given listener.
-//
-// Upon return no more connections will be tunneled, but as the method does not
-// close the listener, so any ongoing connection won't get interrupted.
-func (s *Server) DeleteAddr(l net.Listener, ip net.IP) {
-	s.virtualAddrs.Delete(l, ip)
 }
 
 func (s *Server) getIdentifier(host string) (string, bool) {

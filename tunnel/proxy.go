@@ -15,7 +15,6 @@ var (
 	// DefaultProxyFuncs holds global default proxy functions for all transport protocols.
 	DefaultProxyFuncs = ProxyFuncs{
 		HTTP: new(HTTPProxy).Proxy,
-		TCP:  new(TCPProxy).Proxy,
 		WS:   new(HTTPProxy).Proxy,
 	}
 	// DefaultProxy is a ProxyFunc that uses DefaultProxyFuncs.

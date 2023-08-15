@@ -38,7 +38,6 @@ func main() {
 		AllowedHosts:   config.AllowedHosts,
 		AllowedClients: config.AllowedClients,
 		Log:            logger,
-		ServeTCP:       config.ServeTCP,
 	}
 	server, _ := tunnel.NewServer(cfg)
 	//server.AddHost("sub.example.com", "1234")
@@ -66,5 +65,4 @@ type Config struct {
 	Listen         string   `json:"listen"`
 	AllowedHosts   []string `json:"allowedHosts"`
 	AllowedClients []string `json:"allowedClients"`
-	ServeTCP       bool     `json:"serveTCP"`
 }

@@ -3,6 +3,5 @@
   "listen": ":8080",
   "signatureKey": "secretkey",
   "allowedHosts": ["^.*\\.domain\\.com$"],
-  "allowedClients": ["1234"],
-  "serveTCP": false
+  "allowedClients": ["1234"]
 }
