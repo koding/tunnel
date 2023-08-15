@@ -1,5 +1,6 @@
 build:
 	mkdir build
+	go mod download
 	go build -o build/server server/server.go
 	go build -o build/client client/client.go
 	cp server/config-example.json build/server-config-example.json

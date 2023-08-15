@@ -21,15 +21,13 @@ _As of now server doesn't implement HTTPS connections, so you may want to set it
   "signatureKey": "secretkey",
   "allowedHosts": ["^.*\\.domain\\.com$"],
   "allowedClients": ["1234"],
-  "serveTCP": false
 }
 ```
 * `debug` enable more human-readable log format
 * `listen` IP and port to listen to for incoming connections. This includes both control connections from clients and requests from web
 * `signatureKey` A secret key you share between server and clients. Client will use it to sign its identifier while communicating with server
-* `allowedHosts` List of regex rules to filter allowed domains names. If requested URL didn't match any it will fail with error 400
+* `allowedHosts` List of regex rules to filter allowed domains names. If requested URL didn't match any it will fail with `error 400`
 * `allowedClient` List of client IDs allowed to use this server. If this list is empty then any client with valid signature will be allowed to connect
-* `serveTCP` Enable TCP proxying. This proxy type remains from underlying `koding/tunnel` project and wasn't really tested. Keep it disabled unless you know what are you doing
 
 3. Run `server -c path/to/config.json` or just `server` if the `config.json` is in the same directory
 
