@@ -248,7 +248,7 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) error {
 		if err == io.ErrUnexpectedEOF {
 			s.log.Debug("Client closed the connection, couldn't copy response")
 		} else {
-			s.log.Error("copy err", zap.Error(err)) // do not return, because we might write multipe headers
+			s.log.Error("copy err", zap.Error(err)) // do not return, because we might write multiple headers
 		}
 	}
 
