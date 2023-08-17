@@ -7,7 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"go.uber.org/zap"
-	"io/ioutil"
+	"io"
 	"net"
 	"net/http"
 	"sync"
@@ -206,15 +206,10 @@ func NewClient(cfg *ClientConfig) (*Client, error) {
 		yamuxConfig = cfg.YamuxConfig
 	}
 
-	var proxy = DefaultProxy
-	if cfg.Proxy != nil {
-		proxy = cfg.Proxy
-	}
-
 	var f ProxyFuncs
-	f.HTTP = (&HTTPProxy{TargetHost: cfg.ConnectionConfig.Http.Target}).Proxy
+	f.HTTP = (&HTTPProxy{TargetHost: cfg.ConnectionConfig.Http.Target, Log: cfg.Log}).Proxy
 	f.WS = (&HTTPProxy{TargetHost: cfg.ConnectionConfig.Http.Target}).Proxy
-	proxy = Proxy(f)
+	proxy := Proxy(f)
 
 	var bo Backoff = newForeverBackoff()
 	if cfg.Backoff != nil {
@@ -448,19 +443,21 @@ func (c *Client) connect(identifier, serverAddr string, signatureKey string) err
 	c.log.Debug("CONNECT ", zap.String("URL", remoteURL))
 
 	clientConfig, err := json.Marshal(c.config.ConnectionConfig)
+	if err != nil {
+		return fmt.Errorf("failed to parse Connection config JSON")
+	}
+
 	req, err := http.NewRequest("CONNECT", remoteURL, bytes.NewBuffer(clientConfig))
 	if err != nil {
 		return fmt.Errorf("error creating request to %s: %s", remoteURL, err)
 	}
 
 	req.Header.Set(proto.ClientIdentifierHeader, identifier)
-
 	req.Header.Set(proto.ClientIdentifierSignature, signIdentifier(identifier, signatureKey))
+
 	if err := req.Write(conn); err != nil {
 		return fmt.Errorf("writing CONNECT request to %s failed: %s", req.URL, err)
 	}
-
-	c.log.Debug("Reading response from TCP")
 
 	resp, err := http.ReadResponse(bufio.NewReader(conn), req)
 	if err != nil {
@@ -469,7 +466,7 @@ func (c *Client) connect(identifier, serverAddr string, signatureKey string) err
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK || resp.Status != proto.Connected {
-		out, err := ioutil.ReadAll(resp.Body)
+		out, err := io.ReadAll(resp.Body)
 		if err != nil {
 			return fmt.Errorf("tunnel server error: status=%d, error=%s", resp.StatusCode, err)
 		}

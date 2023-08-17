@@ -1,4 +1,4 @@
-# MyLittleProxy
+# MyLittleProxy [![GoDoc](http://img.shields.io/badge/go-documentation-blue.svg?style=flat-square)](http://godoc.org/github.com/cajax/mylittleproxy) [![Go Report Card](https://goreportcard.com/badge/github.com/cajax/mylittleproxy)](https://goreportcard.com/report/github.com/cajax/mylittleproxy)
 
 MyLittleProxy is a reverse proxy for cases where you cannot or do not want to expose entire development or testing environment to extranet, but also need to test an endpoint or single page.
 
@@ -10,10 +10,24 @@ Server side receives incoming HTTP connections and tunnels them to clients based
 
 Replies from clients are forwarded to requesting side via the same tunnel. 
 
-For example remote server pings your `pr-1234.incoming.company.com/webcallback`, this request is routed to `pr-1234.preproduction.company.com` guarded by firewall. Reply from preproduction server is routed to caller. 
+For example remote server sends HTTP POST to your `feature.test.domain.com/callback`, this request is routed to `1234.pr.domain.com/feature/cb` guarded by firewall via tunnel. Reply from preproduction server is routed to caller. 
+```mermaid
+sequenceDiagram
+    3rd party->>MLP Server: POST feature.test.domain.com/callback
+    MLP Server -->> MLP Proxy: tunnelled call
+    activate MLP Proxy
+    MLP Proxy ->> Preprod: POST 1234.pr.domain.com/feature/cb
+    Preprod ->> MLP Proxy: HTTP 201
+    MLP Proxy -->> MLP Server: tunneled response
+    deactivate MLP Proxy
+    MLP Server ->> 3rd party: HTTP 201
+    box intranet
+    participant MLP Proxy
+    participant Preprod
+    end
+```
 
-
-## How to setup the server
+## Running the server
 #### First you need a machine exposed to extranet. 
 It will receive HTTP commands from clients and incoming requests from web.
 
@@ -40,7 +54,7 @@ You may want to add a wildcard DNS record to automatically catch incoming connec
 #### Run server
 `server -c path/to/config.json` or just `server` if the `config.json` is in the same directory
 
-## How to setup the client
+## Running the client
 #### Configure client
 ```json
 {

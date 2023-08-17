@@ -150,8 +150,7 @@ func GetConfig(configPath *string, config any) error {
 		return err
 	}
 
-	err = json.Unmarshal(configBytes, &config)
-	return nil
+	return json.Unmarshal(configBytes, &config)
 }
 
 func GetExecutableDir() string {

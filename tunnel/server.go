@@ -11,7 +11,6 @@ import (
 	"github.com/koding/logging"
 	"go.uber.org/zap"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"os"
@@ -173,7 +172,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // handleHTTP handles a single HTTP request
 func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) error {
-	s.log.Debug("HandleHTTP request", zap.Any("request", r))
+	s.log.Debug("HandleHTTP request", zap.String("URL", r.URL.String()))
 
 	if s.httpDirector != nil {
 		s.httpDirector(r)
@@ -184,14 +183,9 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) error {
 		return errors.New("request host is empty")
 	}
 
-	// if someone hits foo.example.com:8080, this should be proxied to
-	// localhost:8080, so send the port to the client so it knows how to proxy
-	// correctly. If no port is available, it's up to client how to interpret it
-	host, port, err := parseHostPort(hostPort)
+	host, _, err := parseHostPort(hostPort)
 	if err != nil {
-		// no need to return, just continue lazily, port will be 0, which in
-		// our case will be proxied to client's local servers port 80
-		s.log.Debug("No port available , sending port 80 to client", zap.String("port", hostPort))
+		s.log.Debug("Failed to parse host", zap.String("host", hostPort))
 	}
 
 	// get the identifier associated with this host
@@ -207,17 +201,17 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) error {
 	s.rewriteRequest(r, identifier)
 
 	if isWebsocketConn(r) {
-		s.log.Debug("handling websocket connection")
+		s.log.Debug("handling websocket connection", zap.String("identifier", identifier), zap.String("URL", r.URL.String()))
 
-		return s.handleWSConn(w, r, identifier, port)
+		return s.handleWSConn(w, r, identifier, 0)
 	}
 
-	stream, err := s.dial(identifier, proto.HTTP, port)
+	stream, err := s.dial(identifier, proto.HTTP, 0)
 	if err != nil {
 		return err
 	}
 	defer func() {
-		s.log.Debug("Closing stream")
+		s.log.Debug("Closing stream", zap.String("identifier", identifier), zap.String("URL", r.URL.String()))
 		stream.Close()
 	}()
 
@@ -234,21 +228,21 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) error {
 	defer func() {
 		if resp.Body != nil {
 			if err := resp.Body.Close(); err != nil && err != io.ErrUnexpectedEOF {
-				s.log.Error("resp.Body Close error", zap.Error(err))
+				s.log.Error("resp.Body Close error", zap.Error(err), zap.String("identifier", identifier), zap.String("URL", r.URL.String()))
 			}
 		}
 	}()
 
-	s.log.Debug("Response received, writing back to public connection", zap.Any("response", resp))
+	s.log.Debug("Response received, writing back to public connection", zap.String("status", resp.Status), zap.String("identifier", identifier), zap.String("URL", r.URL.String()))
 
 	copyHeader(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 
 	if _, err := io.Copy(w, resp.Body); err != nil {
 		if err == io.ErrUnexpectedEOF {
-			s.log.Debug("Client closed the connection, couldn't copy response")
+			s.log.Debug("Client closed the connection, couldn't copy response", zap.String("identifier", identifier), zap.String("URL", r.URL.String()))
 		} else {
-			s.log.Error("copy err", zap.Error(err)) // do not return, because we might write multiple headers
+			s.log.Error("copy err", zap.Error(err), zap.String("identifier", identifier), zap.String("URL", r.URL.String())) // do not return, because we might write multiple headers
 		}
 	}
 
@@ -257,9 +251,6 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) error {
 
 // rewriteRequest replaces target host and path with regex rules
 func (s *Server) rewriteRequest(r *http.Request, identifier string) bool {
-	log.Println(r)
-
-	//r.URL.Host = host
 	vh, ok := s.virtualHosts.GetVirtualHost(identifier)
 
 	if !ok {
@@ -273,7 +264,7 @@ func (s *Server) rewriteRequest(r *http.Request, identifier string) bool {
 			return true
 		}
 	}
-	log.Println(r)
+
 	return false
 }
 

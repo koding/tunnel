@@ -3,9 +3,9 @@ package tunnel
 import (
 	"bufio"
 	"bytes"
-	"fmt"
 	"github.com/cajax/mylittleproxy/proto"
 	"github.com/koding/logging"
+	"go.uber.org/zap"
 	"io"
 	"net"
 	"net/http"
@@ -31,7 +31,7 @@ type HTTPProxy struct {
 	ErrorResp *http.Response
 	// Log is a custom logger that can be used for the proxy.
 	// If not set a "http" logger is used.
-	Log logging.Logger
+	Log *zap.Logger
 }
 
 // Proxy is a ProxyFunc.
@@ -41,14 +41,22 @@ func (p *HTTPProxy) Proxy(remote net.Conn, msg *proto.ControlMessage) {
 	}
 
 	req, err := http.ReadRequest(bufio.NewReader(remote))
+	if err != nil {
+		p.Log.Warn("Failed to parse original request", zap.String("URL", req.URL.String()), zap.Error(err))
+		p.sendError(remote)
+		return
+	}
 
 	p.patchRequest(req)
 
 	res, err := http.DefaultClient.Do(req)
-
-	fmt.Println(res, err)
+	status := ""
+	if res != nil {
+		status = res.Status
+	}
+	p.Log.Info("Handled HTTP", zap.String("URL", req.URL.String()), zap.Error(err), zap.String("status", status))
 	if err != nil {
-		p.log().Warning("Failed remote request", req.URL.String(), err)
+		p.Log.Warn("Failed remote request", zap.String("URL", req.URL.String()), zap.Error(err))
 		p.sendError(remote)
 		return
 	}
@@ -74,8 +82,7 @@ func (p *HTTPProxy) sendError(remote net.Conn) {
 	buf := new(bytes.Buffer)
 	w.Write(buf)
 	if _, err := io.Copy(remote, buf); err != nil {
-		var log = p.log()
-		log.Debug("Copy in-mem response error: %s", err)
+		p.Log.Debug("Copy in-mem response error: %s", zap.Error(err))
 	}
 
 	remote.Close()
@@ -92,11 +99,4 @@ func noLocalServer() *http.Response {
 		Body:          io.NopCloser(body),
 		ContentLength: int64(body.Len()),
 	}
-}
-
-func (p *HTTPProxy) log() logging.Logger {
-	if p.Log != nil {
-		return p.Log
-	}
-	return httpLog
 }
