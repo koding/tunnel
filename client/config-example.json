@@ -3,6 +3,7 @@
   "identifier": "1234",
   "serverAddress": "localhost:8080",
   "signatureKey": "secretkey",
+  "controlPath" : "/_controlPath",
   "proxy": {
     "http": {
       "domain": "1234.domain.com",

@@ -2,11 +2,13 @@
 package proto
 
 const (
-	// ControlPath is http.Handler url path for control connection.
-	ControlPath = "/_controlPath/"
+	// DefaultControlPath is http.Handler url path for control connection.
+	DefaultControlPath = "/_controlPath"
 
-	// ClientIdentifierHeader is header carrying information about tunnel identifier.
-	ClientIdentifierHeader    = "X-Tunnel-Identifier"
+	// ClientIdentifierHeader is a header carrying information about tunnel identifier.
+	ClientIdentifierHeader = "X-Tunnel-Identifier"
+
+	// ClientIdentifierSignature is a header carrying salted SHA-1 hash of ClientIdentifierHeader
 	ClientIdentifierSignature = "X-Tunnel-Signature"
 
 	// control messages

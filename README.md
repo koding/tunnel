@@ -27,6 +27,11 @@ sequenceDiagram
     end
 ```
 
+## Building server and client
+`make build`
+
+This will generate two binaries and 2 default configs
+
 ## Running the server
 #### First you need a machine exposed to extranet. 
 It will receive HTTP commands from clients and incoming requests from web.
@@ -42,7 +47,8 @@ You may want to add a wildcard DNS record to automatically catch incoming connec
   "listen": ":8080",
   "signatureKey": "secretkey",
   "allowedHosts": ["^.*\\.your-public-domain\\.com$"],
-  "allowedClients": ["1234"]
+  "allowedClients": ["1234"],
+  "controlPath" : "/customControlPath"
 }
 ```
 * `debug` enable more human-readable log format
@@ -50,6 +56,7 @@ You may want to add a wildcard DNS record to automatically catch incoming connec
 * `signatureKey` A secret key you share between server and clients. Client will use it to sign identifier while communicating with server
 * `allowedHosts` List of regex rules to filter allowed domains names. If requested URL didn't match any it will fail with `error 400`
 * `allowedClient` List of client IDs allowed to use this server. If this list is empty then any client with valid signature will be allowed to connect
+* `controlPath` Use custom path for control protocol if default (`/_controlPath`) interferes with your needs. Leave empty or remove from config to use default value
 
 #### Run server
 `server -c path/to/config.json` or just `server` if the `config.json` is in the same directory
@@ -80,6 +87,7 @@ You may want to add a wildcard DNS record to automatically catch incoming connec
 * `identifier` set custom identifier. Leave empty if you want to automatically use the host name. If you use multiple instances of the same container image or VM with the same host name you really should set custom identifier per instance.
 * `serverAddress` address of proxy server
 * `signatureKey` secret key shared between server and client to sign control calls from client
+* `controlPath` Use custom path for control protocol if default (`/_controlPath`) interferes with your needs. Leave empty or remove from config to use default value. This must match the same of server config
 * `proxy.http.domain` is the desired domain at the server side that will be routed to this client
 * `proxy.http.target` is the target host protocol and port. Requests will be routed to this host
 * `proxy.http.rewrite` list of Regex expressions to rewrite paths in URLs. This list must contain at least one entry and may be as simple as a pair `/ -> /` but then you risk to expose entire local web server. Only requests with matched path will be routed to client. You may use RegEx capture groups and replacements (e.g. `$1`).

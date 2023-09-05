@@ -171,6 +171,9 @@ type ClientConfig struct {
 	// Settings sent to server for given client
 	// TODO separate proto and client config types. Fill proto from config upon creation
 	ConnectionConfig proto.ConnectionConfig
+
+	// Custom control path
+	ControlPath string
 }
 
 // verify is used to verify the ClientConfig
@@ -439,7 +442,11 @@ func (c *Client) connect(identifier, serverAddr string, signatureKey string) err
 		return err
 	}
 
-	remoteURL := controlURL(conn)
+	controlPath := proto.DefaultControlPath
+	if c.config.ControlPath != "" {
+		controlPath = c.config.ControlPath
+	}
+	remoteURL := controlURL(conn, controlPath)
 	c.log.Debug("CONNECT ", zap.String("URL", remoteURL))
 
 	clientConfig, err := json.Marshal(c.config.ConnectionConfig)

@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"github.com/cajax/mylittleproxy/proto"
 	"github.com/cajax/mylittleproxy/tunnel"
 	"go.uber.org/zap"
 	"log"
@@ -33,14 +34,21 @@ func main() {
 
 	signatureKey := getSignatureKey(config, logger)
 
+	controlPath := proto.DefaultControlPath
+
+	if config.ControlPath != "" {
+		controlPath = config.ControlPath
+	}
+
 	cfg := &tunnel.ServerConfig{
 		SignatureKey:   signatureKey,
 		AllowedHosts:   config.AllowedHosts,
 		AllowedClients: config.AllowedClients,
 		Log:            logger,
+		ControlPath:    controlPath,
 	}
 	server, _ := tunnel.NewServer(cfg)
-	//server.AddHost("sub.example.com", "1234")
+	logger.Info("Listening", zap.String("control_url", config.Listen+controlPath))
 	err = http.ListenAndServe(config.Listen, server)
 	if err != nil {
 		logger.Fatal("unable to start http server", zap.Error(err))
@@ -65,4 +73,5 @@ type Config struct {
 	Listen         string   `json:"listen"`
 	AllowedHosts   []string `json:"allowedHosts"`
 	AllowedClients []string `json:"allowedClients"`
+	ControlPath    string   `json:"controlPath"`
 }

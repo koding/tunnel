@@ -3,5 +3,6 @@
   "listen": ":8080",
   "signatureKey": "secretkey",
   "allowedHosts": ["^.*\\.domain\\.com$"],
-  "allowedClients": ["1234"]
+  "allowedClients": ["1234"],
+  "controlPath" : "/_controlPath"
 }

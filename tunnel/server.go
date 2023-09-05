@@ -1,6 +1,3 @@
-// package mylittleproxy is a server/client package that enables to proxy public
-// connections to your local machine over a tunnel connection from the local
-// machine to the public server.
 package tunnel
 
 import (
@@ -82,6 +79,9 @@ type Server struct {
 
 	// List of allowed clients. Allows any if list is empty
 	allowedClients []string
+
+	// Path in URL used for communication between client and server proxy
+	controlPath string
 }
 
 // ServerConfig defines the configuration for the Server
@@ -113,6 +113,7 @@ type ServerConfig struct {
 
 	//List of allowed clients. Allows any if list is empty
 	AllowedClients []string
+	ControlPath    string
 }
 
 // NewServer creates a new Server. The defaults are used if config is nil.
@@ -146,18 +147,15 @@ func NewServer(cfg *ServerConfig) (*Server, error) {
 		signatureKey:          cfg.SignatureKey,
 		allowedHosts:          cfg.AllowedHosts,
 		allowedClients:        cfg.AllowedClients,
+		controlPath:           cfg.ControlPath,
 	}
 
 	return s, nil
 }
 
-// ServeHTTP is a tunnel that creates an http/websocket tunnel between a
-// public connection and the client connection.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// if the user didn't add the control and tunnel handler manually, we'll
-	// going to infer and call the respective path handlers.
-	switch path.Clean(r.URL.Path) + "/" {
-	case proto.ControlPath:
+	switch path.Clean(r.URL.Path) {
+	case s.controlPath:
 		s.checkConnect(s.controlHandler).ServeHTTP(w, r)
 		return
 	}
@@ -172,7 +170,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // handleHTTP handles a single HTTP request
 func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) error {
-	s.log.Debug("HandleHTTP request", zap.String("URL", r.URL.String()))
+	s.log.Debug("HandleHTTP request", zap.String("URL", r.URL.String()), zap.String("remote_address", r.RemoteAddr))
 
 	if s.httpDirector != nil {
 		s.httpDirector(r)
@@ -201,7 +199,7 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) error {
 	s.rewriteRequest(r, identifier)
 
 	if isWebsocketConn(r) {
-		s.log.Debug("handling websocket connection", zap.String("identifier", identifier), zap.String("URL", r.URL.String()))
+		s.log.Debug("handling websocket connection", zap.String("client_id", identifier), zap.String("URL", r.URL.String()))
 
 		return s.handleWSConn(w, r, identifier, 0)
 	}
@@ -211,7 +209,7 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	defer func() {
-		s.log.Debug("Closing stream", zap.String("identifier", identifier), zap.String("URL", r.URL.String()))
+		s.log.Debug("Closing stream", zap.String("client_id", identifier), zap.String("URL", r.URL.String()))
 		stream.Close()
 	}()
 
@@ -219,7 +217,7 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 
-	s.log.Debug("Session opened to client, writing request to client")
+	s.log.Debug("Session opened to client, writing request to client", zap.String("client_id", identifier))
 	resp, err := http.ReadResponse(bufio.NewReader(stream), r)
 	if err != nil {
 		return fmt.Errorf("read from tunnel: %s", err.Error())
@@ -228,21 +226,21 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) error {
 	defer func() {
 		if resp.Body != nil {
 			if err := resp.Body.Close(); err != nil && err != io.ErrUnexpectedEOF {
-				s.log.Error("resp.Body Close error", zap.Error(err), zap.String("identifier", identifier), zap.String("URL", r.URL.String()))
+				s.log.Error("resp.Body Close error", zap.Error(err), zap.String("client_id", identifier), zap.String("URL", r.URL.String()))
 			}
 		}
 	}()
 
-	s.log.Debug("Response received, writing back to public connection", zap.String("status", resp.Status), zap.String("identifier", identifier), zap.String("URL", r.URL.String()))
+	s.log.Debug("Response received, writing back to public connection", zap.String("status", resp.Status), zap.String("client_id", identifier), zap.String("URL", r.URL.String()))
 
 	copyHeader(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 
 	if _, err := io.Copy(w, resp.Body); err != nil {
 		if err == io.ErrUnexpectedEOF {
-			s.log.Debug("Client closed the connection, couldn't copy response", zap.String("identifier", identifier), zap.String("URL", r.URL.String()))
+			s.log.Debug("Client closed the connection, couldn't copy response", zap.String("client_id", identifier), zap.String("URL", r.URL.String()))
 		} else {
-			s.log.Error("copy err", zap.Error(err), zap.String("identifier", identifier), zap.String("URL", r.URL.String())) // do not return, because we might write multiple headers
+			s.log.Error("copy err", zap.Error(err), zap.String("client_id", identifier), zap.String("URL", r.URL.String())) // do not return, because we might write multiple headers
 		}
 	}
 
@@ -336,7 +334,7 @@ func (s *Server) dial(identifier string, p proto.Type, port int) (net.Conn, erro
 		LocalPort: port,
 	}
 
-	s.log.Debug("Sending control msg", zap.Any("message", msg))
+	s.log.Debug("Sending control msg", zap.Any("message", msg), zap.String("client_id", identifier))
 
 	// ask client to open a session to us, so we can accept it
 	if err := control.send(msg); err != nil {
@@ -356,7 +354,7 @@ func (s *Server) dial(identifier string, p proto.Type, port int) (net.Conn, erro
 	}
 
 	// if we don't receive anything from the client, we'll timeout
-	s.log.Debug("Waiting for session accept")
+	s.log.Debug("Waiting for session accept", zap.String("client_id", identifier))
 
 	select {
 	case err := <-async(acceptStream):
@@ -386,11 +384,11 @@ func (s *Server) controlHandler(w http.ResponseWriter, r *http.Request) (ctErr e
 		ct.Close()
 		s.deleteControl(identifier)
 		s.deleteSession(identifier)
-		s.log.Warn("Control connection for %q already exists. This is a race condition and needs to be fixed on client implementation", zap.String("identifier", identifier))
+		s.log.Warn("Control connection already exists. This is a race condition and needs to be fixed on client implementation", zap.String("client_id", identifier))
 		return fmt.Errorf("control conn for %s already exist. \n", identifier)
 	}
 
-	s.log.Debug("Tunnel with identifier", zap.String("identifier", identifier))
+	s.log.Debug("New Client connection", zap.String("client_id", identifier), zap.String("remote_address", r.RemoteAddr))
 
 	hj, ok := w.(http.Hijacker)
 	if !ok {
@@ -410,7 +408,7 @@ func (s *Server) controlHandler(w http.ResponseWriter, r *http.Request) (ctErr e
 		return fmt.Errorf("error setting connection deadline: %s", err)
 	}
 
-	s.log.Debug("Creating control session")
+	s.log.Debug("Creating control session", zap.String("client_id", identifier))
 	session, err := yamux.Server(conn, s.yamuxConfig)
 	if err != nil {
 		return err
@@ -444,7 +442,7 @@ func (s *Server) controlHandler(w http.ResponseWriter, r *http.Request) (ctErr e
 		return errors.New("timeout getting session")
 	}
 
-	s.log.Debug("Initiating handshake protocol")
+	s.log.Debug("Initiating handshake protocol", zap.String("client_id", identifier))
 	buf := make([]byte, len(proto.HandshakeRequest))
 	if _, err := stream.Read(buf); err != nil {
 		return err
@@ -463,7 +461,7 @@ func (s *Server) controlHandler(w http.ResponseWriter, r *http.Request) (ctErr e
 	s.addControl(identifier, ct)
 	go s.listenControl(ct)
 
-	s.log.Debug("Control connection is setup")
+	s.log.Debug("Control connection is setup", zap.String("client_id", identifier))
 	return nil
 }
 
@@ -476,7 +474,7 @@ func (s *Server) listenControl(ct *control) {
 		err := ct.dec.Decode(&msg)
 		if err != nil {
 			host, _ := s.getHost(ct.identifier)
-			s.log.Debug("Closing client connection", zap.String("host", host), zap.String("identifier", ct.identifier))
+			s.log.Debug("Closing client connection", zap.String("host", host), zap.String("client_id", ct.identifier))
 
 			// close client connection so it reconnects again
 			ct.Close()
@@ -512,7 +510,7 @@ func (s *Server) OnConnect(identifier string, fn func() error) {
 // or stateChanges chanel readers) when client connects.
 func (s *Server) onConnect(identifier string) {
 	if err := s.onConnectCallbacks.call(identifier); err != nil {
-		s.log.Error("OnConnect: error calling callback", zap.String("identifier", identifier), zap.Error(err))
+		s.log.Error("OnConnect: error calling callback", zap.String("client_id", identifier), zap.Error(err))
 	}
 
 	s.changeState(identifier, ClientConnected, nil)
@@ -530,7 +528,7 @@ func (s *Server) OnDisconnect(identifier string, fn func() error) {
 // or stateChanges chanel readers) when client disconnects.
 func (s *Server) onDisconnect(identifier string, err error) {
 	if err := s.onDisconnectCallbacks.call(identifier); err != nil {
-		s.log.Error("OnDisconnect: error calling callback", zap.String("identifier", identifier), zap.Error(err))
+		s.log.Error("OnDisconnect: error calling callback", zap.String("client_id", identifier), zap.Error(err))
 	}
 
 	s.changeState(identifier, ClientClosed, err)

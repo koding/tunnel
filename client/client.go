@@ -21,7 +21,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Println("Running server with ", *configPath)
+	fmt.Println("Running client with ", *configPath)
 	var logger *zap.Logger
 	if config.Debug {
 		logger = zap.Must(zap.NewDevelopment())
@@ -75,6 +75,7 @@ func getTunnelConfig(identifier string, config Config, httpRewrites []proto.HTTP
 			},
 		},
 		SignatureKey: signatureKey,
+		ControlPath:  config.ControlPath,
 		Log:          logger,
 	}
 	return cfg
@@ -137,6 +138,7 @@ type Config struct {
 	ServerAddress string           `json:"serverAddress"`
 	SignatureKey  string           `json:"signatureKey"`
 	Proxy         ConnectionConfig `json:"proxy"`
+	ControlPath   string           `json:"controlPath"`
 }
 
 type ConnectionConfig struct {
