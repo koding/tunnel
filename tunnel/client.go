@@ -174,6 +174,9 @@ type ClientConfig struct {
 
 	// Custom control path
 	ControlPath string
+
+	// Custom HTTP method of cotrol protocol
+	ControlMethod string
 }
 
 // verify is used to verify the ClientConfig
@@ -454,7 +457,7 @@ func (c *Client) connect(identifier, serverAddr string, signatureKey string) err
 		return fmt.Errorf("failed to parse Connection config JSON")
 	}
 
-	req, err := http.NewRequest("CONNECT", remoteURL, bytes.NewBuffer(clientConfig))
+	req, err := http.NewRequest(c.config.ControlMethod, remoteURL, bytes.NewBuffer(clientConfig))
 	if err != nil {
 		return fmt.Errorf("error creating request to %s: %s", remoteURL, err)
 	}

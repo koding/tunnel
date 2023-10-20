@@ -5,6 +5,9 @@ const (
 	// DefaultControlPath is http.Handler url path for control connection.
 	DefaultControlPath = "/_controlPath"
 
+	// DefaultControlMethod is HTTP method used by default.
+	DefaultControlMethod = "POST"
+
 	// ClientIdentifierHeader is a header carrying information about tunnel identifier.
 	ClientIdentifierHeader = "X-Tunnel-Identifier"
 

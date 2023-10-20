@@ -4,5 +4,6 @@
   "signatureKey": "secretkey",
   "allowedHosts": ["^.*\\.domain\\.com$"],
   "allowedClients": ["1234"],
-  "controlPath" : "/_controlPath"
+  "controlPath" : "/_controlPath",
+  "controlMethod": "POST"
 }

@@ -48,15 +48,17 @@ You may want to add a wildcard DNS record to automatically catch incoming connec
   "signatureKey": "secretkey",
   "allowedHosts": ["^.*\\.your-public-domain\\.com$"],
   "allowedClients": ["1234"],
-  "controlPath" : "/customControlPath"
+  "controlPath" : "/customControlPath",
+  "controlMethod": "POST"
 }
 ```
-* `debug` enable more human-readable log format
-* `listen` IP and port to listen to for incoming connections. This includes both control connections from clients and requests from web thus needs to be allowed by firewall
+* `debug` Enable more human-readable log format
+* `listen` IP and port to listen to for incoming connections. This includes both control connections from clients and requests from the Web thus needs to be allowed by firewall
 * `signatureKey` A secret key you share between server and clients. Client will use it to sign identifier while communicating with server
 * `allowedHosts` List of regex rules to filter allowed domains names. If requested URL didn't match any it will fail with `error 400`
 * `allowedClient` List of client IDs allowed to use this server. If this list is empty then any client with valid signature will be allowed to connect
 * `controlPath` Use custom path for control protocol if default (`/_controlPath`) interferes with your needs. Leave empty or remove from config to use default value
+* `controlMethod` Custom HTTP method of control call. The default is `POST`.
 
 #### Run server
 `server -c path/to/config.json` or just `server` if the `config.json` is in the same directory
@@ -69,6 +71,8 @@ You may want to add a wildcard DNS record to automatically catch incoming connec
   "identifier": "1234",
   "serverAddress": "localhost:8080",
   "signatureKey": "secretkey",
+  "controlPath" : "/customControlPath",
+  "controlMethod": "POST",
   "proxy": {
     "http": {
       "domain": "1234.domain.com",
@@ -83,13 +87,14 @@ You may want to add a wildcard DNS record to automatically catch incoming connec
   }
 }
 ```
-* `debug` enable more human-readable log format
-* `identifier` set custom identifier. Leave empty if you want to automatically use the host name. If you use multiple instances of the same container image or VM with the same host name you really should set custom identifier per instance.
-* `serverAddress` address of proxy server
-* `signatureKey` secret key shared between server and client to sign control calls from client
-* `controlPath` Use custom path for control protocol if default (`/_controlPath`) interferes with your needs. Leave empty or remove from config to use default value. This must match the same of server config
-* `proxy.http.domain` is the desired domain at the server side that will be routed to this client
-* `proxy.http.target` is the target host protocol and port. Requests will be routed to this host
+* `debug` Enable more human-readable log format
+* `identifier` Set custom identifier. Leave empty if you want to automatically use the host name. If you use multiple instances of the same container image or VM with the same host name you really should set custom identifier per instance.
+* `serverAddress` Address of proxy server
+* `signatureKey` Secret key shared between server and client to sign control calls from client
+* `controlPath` Use custom path for control protocol if default (`/_controlPath`) interferes with your needs. This field is optional but must match the same of server config
+* `controlMethod` Custom HTTP method of control call. The default is `POST`. This field is optional but must match the same of server config
+* `proxy.http.domain` Is the desired domain at the server side that will be routed to this client
+* `proxy.http.target` Is the target host protocol and port. Requests will be routed to this host
 * `proxy.http.rewrite` list of Regex expressions to rewrite paths in URLs. This list must contain at least one entry and may be as simple as a pair `/ -> /` but then you risk to expose entire local web server. Only requests with matched path will be routed to client. You may use RegEx capture groups and replacements (e.g. `$1`).
 
 #### Run

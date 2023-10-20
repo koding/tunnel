@@ -82,6 +82,9 @@ type Server struct {
 
 	// Path in URL used for communication between client and server proxy
 	controlPath string
+
+	// HTTP method used in control calls
+	controlMethod string
 }
 
 // ServerConfig defines the configuration for the Server
@@ -113,7 +116,10 @@ type ServerConfig struct {
 
 	//List of allowed clients. Allows any if list is empty
 	AllowedClients []string
-	ControlPath    string
+
+	ControlPath string
+
+	ControlMethod string
 }
 
 // NewServer creates a new Server. The defaults are used if config is nil.
@@ -148,6 +154,7 @@ func NewServer(cfg *ServerConfig) (*Server, error) {
 		allowedHosts:          cfg.AllowedHosts,
 		allowedClients:        cfg.AllowedClients,
 		controlPath:           cfg.ControlPath,
+		controlMethod:         cfg.ControlMethod,
 	}
 
 	return s, nil
@@ -639,8 +646,8 @@ func copyHeader(dst, src http.Header) {
 // checkConnect checks whether the incoming request is HTTP CONNECT method.
 func (s *Server) checkConnect(fn func(w http.ResponseWriter, r *http.Request) error) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "CONNECT" {
-			http.Error(w, "405 must CONNECT\n", http.StatusMethodNotAllowed)
+		if r.Method != s.controlMethod {
+			http.Error(w, fmt.Sprintf("405 must %s\n", s.controlMethod), http.StatusMethodNotAllowed)
 			return
 		}
 

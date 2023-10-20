@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"github.com/cajax/mylittleproxy/appConfig"
 	"github.com/cajax/mylittleproxy/proto"
 	"github.com/cajax/mylittleproxy/tunnel"
 	"go.uber.org/zap"
@@ -13,7 +14,7 @@ import (
 func main() {
 	configPath := getConfigPath()
 	flag.Parse()
-	var config Config
+	var config appConfig.Client
 	err := tunnel.GetConfig(configPath, &config)
 
 	if err != nil {
@@ -63,7 +64,17 @@ func main() {
 	client.Start()
 }
 
-func getTunnelConfig(identifier string, config Config, httpRewrites []proto.HTTPRewriteRule, signatureKey string, logger *zap.Logger) *tunnel.ClientConfig {
+func getTunnelConfig(identifier string, config appConfig.Client, httpRewrites []proto.HTTPRewriteRule, signatureKey string, logger *zap.Logger) *tunnel.ClientConfig {
+	controlPath := proto.DefaultControlPath
+	if config.ControlPath != "" {
+		controlPath = config.ControlPath
+	}
+
+	controlMethod := proto.DefaultControlMethod
+	if config.ControlMethod != "" {
+		controlMethod = config.ControlMethod
+	}
+
 	cfg := &tunnel.ClientConfig{
 		Identifier: identifier,
 		ServerAddr: config.ServerAddress,
@@ -74,9 +85,10 @@ func getTunnelConfig(identifier string, config Config, httpRewrites []proto.HTTP
 				Rewrite: httpRewrites,
 			},
 		},
-		SignatureKey: signatureKey,
-		ControlPath:  config.ControlPath,
-		Log:          logger,
+		SignatureKey:  signatureKey,
+		ControlPath:   controlPath,
+		ControlMethod: controlMethod,
+		Log:           logger,
 	}
 	return cfg
 }
@@ -106,7 +118,7 @@ Example of config file:
 	return configPath
 }
 
-func getIdentifier(config Config, logger *zap.Logger) string {
+func getIdentifier(config appConfig.Client, logger *zap.Logger) string {
 	identifier := config.Identifier
 	var err error
 	if identifier == "" {
@@ -120,7 +132,7 @@ func getIdentifier(config Config, logger *zap.Logger) string {
 	return identifier
 }
 
-func getSignatureKey(config Config, logger *zap.Logger) string {
+func getSignatureKey(config appConfig.Client, logger *zap.Logger) string {
 	signatureKey := config.SignatureKey
 	if signatureKey == "" {
 		signatureKey = os.Getenv("MYLITTLEPROXY_SIGNATURE_KEY")
@@ -130,28 +142,4 @@ func getSignatureKey(config Config, logger *zap.Logger) string {
 		os.Exit(1)
 	}
 	return signatureKey
-}
-
-type Config struct {
-	Debug         bool             `json:"debug"`
-	Identifier    string           `json:"identifier"`
-	ServerAddress string           `json:"serverAddress"`
-	SignatureKey  string           `json:"signatureKey"`
-	Proxy         ConnectionConfig `json:"proxy"`
-	ControlPath   string           `json:"controlPath"`
-}
-
-type ConnectionConfig struct {
-	Http HTTPConfig `json:"http"`
-}
-
-type HTTPConfig struct {
-	Domain  string            `json:"domain"`
-	Target  string            `json:"target"`
-	Rewrite []HTTPRewriteRule `json:"rewrite"`
-}
-
-type HTTPRewriteRule struct {
-	From string `json:"from"`
-	To   string `json:"to"`
 }
